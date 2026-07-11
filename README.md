@@ -38,7 +38,13 @@ Guide a low-poly UFO around a floating farm island, abduct the requested creatur
 
 The eight visual references supplied for development are stored in the references/ folder.
 
-That folder contains a .gdignore file, preventing Godot from importing or packaging the screenshots into the Android build. They are reference material only and are not used as game assets.
+External reference sources:
+
+- App Store page: https://apps.apple.com/us/app/suck-it-up/id1192670763
+- Gameplay video: https://youtu.be/HuE8JKTiZH0?si=P9EQ-Nix2HGxp7Zb
+- Additional gameplay reference (from 1:15, right side): https://youtu.be/kVTvKtlJfeg?si=7ojN82FkFsWYkSJ5
+
+The folder contains a .gdignore file, preventing Godot from importing or packaging the screenshots into the Android build. The screenshots and external links are reference material only and are not used as game assets.
 
 ## Android development setup
 

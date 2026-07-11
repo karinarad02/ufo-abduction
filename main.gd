@@ -26,6 +26,14 @@ var frenzy_bar: ProgressBar
 var title_panel: Control
 var result_panel: Control
 var result_label: Label
+var hud_root: Control
+var pause_button: Button
+var menu_root: Control
+var menu_content: Control
+var game_ui: Control
+var gems := 55
+var coins := 1195
+var duck_level := 4
 
 func _ready() -> void:
 	rng.randomize()
@@ -49,13 +57,13 @@ func mat(color: Color, emission := Color.BLACK, transparent := false) -> Standar
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	return m
 
-func box(parent: Node, size: Vector3, pos: Vector3, color: Color, rotation := Vector3.ZERO) -> MeshInstance3D:
+func box(parent: Node, size: Vector3, pos: Vector3, color: Color, box_rotation := Vector3.ZERO) -> MeshInstance3D:
 	var n := MeshInstance3D.new()
 	var mesh := BoxMesh.new()
 	mesh.size = size
 	n.mesh = mesh
 	n.position = pos
-	n.rotation = rotation
+	n.rotation = box_rotation
 	n.material_override = mat(color)
 	parent.add_child(n)
 	return n
@@ -146,6 +154,10 @@ func build_ship() -> void:
 	beam.material_override=mat(Color(0.72,0.35,0.94,.3),Color("#a252df"),true)
 	beam.visible=false
 	ship.add_child(beam)
+	for i in 24:
+		var a:=i*TAU/24.0
+		var tile:=box(ship,Vector3(.18,.035,.38),Vector3(cos(a)*.92,-2.28,sin(a)*.92),Color("#743a91") if i%3 else Color("#f0c52d"))
+		tile.rotation.y=-a
 
 func spawn_creature() -> void:
 	var kind:=rng.randi_range(0,3)
@@ -186,24 +198,160 @@ func build_ui() -> void:
 	var root:=Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	layer.add_child(root)
-	score_label=make_label(root,"0",Vector2(22,32),34)
-	timer_label=make_label(root,"60",Vector2(450,32),34)
-	target_label=make_label(root,"BEAM: COW",Vector2(165,34),24)
-	combo_label=make_label(root,"COMBO 0",Vector2(22,78),19)
-	frenzy_bar=ProgressBar.new()
-	frenzy_bar.position=Vector2(165,75); frenzy_bar.size=Vector2(220,18); frenzy_bar.max_value=100; frenzy_bar.show_percentage=false
-	root.add_child(frenzy_bar)
-	title_panel=panel(root,Vector2(45,270),Vector2(450,300),Color(0.18,0.12,0.48,.92))
-	make_label(title_panel,"UFO",Vector2(0,35),62,450,HORIZONTAL_ALIGNMENT_CENTER)
-	make_label(title_panel,"ABDUCTION",Vector2(0,100),45,450,HORIZONTAL_ALIGNMENT_CENTER)
-	make_label(title_panel,"Drag to fly • Hold to beam",Vector2(0,175),20,450,HORIZONTAL_ALIGNMENT_CENTER)
-	make_label(title_panel,"TAP TO LAUNCH",Vector2(0,230),27,450,HORIZONTAL_ALIGNMENT_CENTER)
-	result_panel=panel(root,Vector2(55,280),Vector2(430,300),Color(0.12,0.1,0.35,.94))
+	hud_root=root
+	game_ui=Control.new()
+	game_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(game_ui)
+	var top_band:=ColorRect.new()
+	top_band.color=Color("#668bd1b8"); top_band.position=Vector2(0,0); top_band.size=Vector2(540,108); top_band.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	game_ui.add_child(top_band)
+	score_label=make_label(game_ui,"0",Vector2(24,22),42)
+	timer_label=make_label(game_ui,"",Vector2.ZERO,1); timer_label.visible=false
+	var meter_outer:=panel(game_ui,Vector2(226,9),Vector2(88,88),Color("#f8c62d"))
+	round_panel(meter_outer,44,Color("#f8c62d"),0)
+	var meter_inner:=panel(game_ui,Vector2(236,19),Vector2(68,68),Color("#43516a"))
+	round_panel(meter_inner,34,Color("#43516a"),0)
+	make_label(game_ui,"[]",Vector2(236,27),30,68,HORIZONTAL_ALIGNMENT_CENTER)
+	target_label=make_label(game_ui,KINDS[target_kind],Vector2(210,81),13,120,HORIZONTAL_ALIGNMENT_CENTER)
+	combo_label=make_label(game_ui,"",Vector2.ZERO,1); combo_label.visible=false
+	frenzy_bar=ProgressBar.new(); frenzy_bar.visible=false; game_ui.add_child(frenzy_bar)
+	pause_button=Button.new(); pause_button.text="II"; pause_button.position=Vector2(465,20); pause_button.size=Vector2(56,56)
+	pause_button.add_theme_font_size_override("font_size",26); pause_button.add_theme_color_override("font_color",Color.WHITE)
+	pause_button.process_mode=Node.PROCESS_MODE_ALWAYS; pause_button.pressed.connect(toggle_pause); game_ui.add_child(pause_button)
+	result_panel=panel(root,Vector2(55,280),Vector2(430,300),Color("#35479bf2"))
 	make_label(result_panel,"SHIFT COMPLETE",Vector2(0,30),34,430,HORIZONTAL_ALIGNMENT_CENTER)
 	result_label=make_label(result_panel,"SCORE 0",Vector2(0,110),34,430,HORIZONTAL_ALIGNMENT_CENTER)
-	make_label(result_panel,"TAP TO PLAY AGAIN",Vector2(0,225),23,430,HORIZONTAL_ALIGNMENT_CENTER)
+	var again:=menu_button(result_panel,"PLAY AGAIN",Vector2(65,215),Vector2(300,64),Color("#c83fe0"))
+	again.pressed.connect(start_game)
 	result_panel.visible=false
+	game_ui.visible=false
+	build_menu_shell(root)
+	show_menu("home")
+	build_splash(root)
 
+func build_splash(root:Control)->void:
+	var splash:=Control.new(); splash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); splash.mouse_filter=Control.MOUSE_FILTER_STOP; root.add_child(splash)
+	var bg:=ColorRect.new(); bg.color=Color("#d8fff1"); bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); splash.add_child(bg)
+	var mascot:=panel(splash,Vector2(165,250),Vector2(210,300),Color("#cfd6d5"))
+	round_panel(mascot,35,Color("#cfd6d5"),0)
+	make_label(mascot,"o   o",Vector2(0,100),42,210,HORIZONTAL_ALIGNMENT_CENTER)
+	make_label(mascot,"u",Vector2(0,145),36,210,HORIZONTAL_ALIGNMENT_CENTER)
+	make_label(splash,"UFO ABDUCTION",Vector2(0,610),34,540,HORIZONTAL_ALIGNMENT_CENTER)
+	var tw:=create_tween(); tw.tween_interval(1.35); tw.tween_property(splash,"modulate:a",0.0,.45); tw.tween_callback(splash.queue_free)
+
+func build_menu_shell(root:Control)->void:
+	menu_root=Control.new(); menu_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); root.add_child(menu_root)
+	var bg:=ColorRect.new(); bg.color=Color("#8a55c4"); bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); menu_root.add_child(bg)
+	make_label(menu_root,"◆ %d"%gems,Vector2(16,22),28)
+	var gem_plus:=menu_button(menu_root,"+",Vector2(140,13),Vector2(46,52),Color("#16bc67")); gem_plus.add_theme_font_size_override("font_size",30)
+	make_label(menu_root,"◇ %d"%coins,Vector2(360,22),28)
+	var coin_plus:=menu_button(menu_root,"+",Vector2(480,13),Vector2(46,52),Color("#16bc67")); coin_plus.add_theme_font_size_override("font_size",30)
+	menu_content=Control.new(); menu_content.position=Vector2(14,88); menu_content.size=Vector2(512,758); menu_root.add_child(menu_content)
+	var tabs=[["COLL",Color("#43d6ec"),"collections"],["LAB",Color("#d547db"),"research"],["PILOTS",Color("#f49b19"),"pilots"],["PLAY",Color("#29c75b"),"play"]]
+	for i in tabs.size():
+		var b:=menu_button(menu_root,tabs[i][0],Vector2(8+i*133,864),Vector2(125,82),tabs[i][1])
+		b.add_theme_font_size_override("font_size",18)
+		var page:String=tabs[i][2]
+		if page=="play": b.pressed.connect(start_game)
+		else: b.pressed.connect(show_menu.bind(page))
+
+func clear_content()->void:
+	for child in menu_content.get_children(): child.queue_free()
+
+func show_menu(page:String)->void:
+	game_state="menu"; game_ui.visible=false; result_panel.visible=false; menu_root.visible=true
+	clear_content()
+	if page=="home": build_home()
+	elif page=="collections": build_collections()
+	elif page=="research": build_research()
+	elif page=="pilots": build_pilots()
+	elif page=="duck": build_duck_detail()
+
+func menu_heading(title:String,color:=Color("#35479b"))->Panel:
+	var h:=panel(menu_content,Vector2(0,0),Vector2(512,82),color)
+	make_label(h,title,Vector2(0,18),38,512,HORIZONTAL_ALIGNMENT_CENTER)
+	return h
+
+func build_home()->void:
+	menu_heading("UFO ABDUCTION")
+	var card:=panel(menu_content,Vector2(0,100),Vector2(512,600),Color("#445ba8"))
+	make_label(card,"READY,\nSPACE PILOT?",Vector2(0,60),45,512,HORIZONTAL_ALIGNMENT_CENTER)
+	make_label(card,"Collect creatures, chain combos,\nand charge into FRENZY!",Vector2(0,190),21,512,HORIZONTAL_ALIGNMENT_CENTER)
+	var play:=menu_button(card,"LAUNCH",Vector2(75,330),Vector2(362,100),Color("#2dcc55")); play.add_theme_font_size_override("font_size",38); play.pressed.connect(start_game)
+	make_label(card,"BEST SCORE  %05d"%best,Vector2(0,480),22,512,HORIZONTAL_ALIGNMENT_CENTER)
+
+func build_collections()->void:
+	menu_heading("COLLECTIONS")
+	var card:=panel(menu_content,Vector2(0,100),Vector2(512,600),Color("#556fae"))
+	var data=[["COW","COMMON",Color("#48ccef")],["DUCK","COMMON",Color("#d444d9")],["PIG","COMMON",Color("#f49a18")],["SHEEP","RARE",Color("#2bc85b")]]
+	for i in data.size():
+		var x:=24+(i%2)*240; var y:=35+(i/2.0)*245
+		var b:=menu_button(card,data[i][0]+"\nLvl.%d"%(3+i),Vector2(x,y),Vector2(220,205),data[i][2])
+		b.add_theme_font_size_override("font_size",27)
+		make_label(b,data[i][1],Vector2(0,148),15,220,HORIZONTAL_ALIGNMENT_CENTER)
+		if i==1: b.pressed.connect(show_menu.bind("duck"))
+
+func build_research()->void:
+	menu_heading("RESEARCH LAB")
+	var card:=panel(menu_content,Vector2(0,100),Vector2(512,600),Color("#7652a5"))
+	for i in 3:
+		var x:=18+i*164
+		var pod:=panel(card,Vector2(x,50),Vector2(150,330),Color("#4157a7"))
+		make_label(pod,str(i+1),Vector2(0,12),28,150,HORIZONTAL_ALIGNMENT_CENTER)
+		var glass:=panel(pod,Vector2(20,62),Vector2(110,145),Color("#cf4be080"))
+		round_panel(glass,4,Color("#cf4be080"),2)
+		make_label(glass,"EGG" if i<2 else "EMPTY",Vector2(0,50),22,110,HORIZONTAL_ALIGNMENT_CENTER)
+		var action:=menu_button(pod,"COLLECT" if i==1 else ("1:59:54" if i==0 else "START"),Vector2(10,235),Vector2(130,68),Color("#f4a014") if i==1 else Color("#36c95c"))
+		action.add_theme_font_size_override("font_size",18)
+	make_label(card,"Research eggs to discover new creatures",Vector2(0,455),20,512,HORIZONTAL_ALIGNMENT_CENTER)
+
+func build_pilots()->void:
+	menu_heading("SPACE PILOTS")
+	var card:=panel(menu_content,Vector2(0,100),Vector2(512,600),Color("#596276"))
+	var names=["NOVA","PAULA","ACE","BOT","MIMI","LOCKED"]
+	for i in names.size():
+		var x:=20+(i%3)*164; var y:=28+(i/3.0)*250
+		var c:=menu_button(card,names[i],Vector2(x,y),Vector2(145,215),Color("#3c465c") if i==5 else Color("#5364aa"))
+		c.add_theme_font_size_override("font_size",20)
+		make_label(c,"■",Vector2(0,48),62,145,HORIZONTAL_ALIGNMENT_CENTER)
+		make_label(c,"SELECTED" if i==0 else ("???" if i==5 else "UNLOCKED"),Vector2(0,160),14,145,HORIZONTAL_ALIGNMENT_CENTER)
+
+func build_duck_detail()->void:
+	menu_heading("Duck        COMMON")
+	var card:=panel(menu_content,Vector2(0,96),Vector2(512,650),Color("#35479b"))
+	make_label(card,"DUCK",Vector2(28,35),42,190,HORIZONTAL_ALIGNMENT_CENTER)
+	make_label(card,"Lvl.%d ▲"%duck_level,Vector2(245,35),32)
+	var progress:=ProgressBar.new(); progress.position=Vector2(195,100); progress.size=Vector2(285,42); progress.max_value=500; progress.value=500; progress.show_percentage=false
+	var fill:=StyleBoxFlat.new(); fill.bg_color=Color("#42d65c"); progress.add_theme_stylebox_override("fill",fill)
+	var back:=StyleBoxFlat.new(); back.bg_color=Color("#253678"); progress.add_theme_stylebox_override("background",back); card.add_child(progress)
+	make_label(card,"514/500",Vector2(195,104),22,285,HORIZONTAL_ALIGNMENT_CENTER)
+	make_label(card,"Total Sucked: 1139",Vector2(220,150),20)
+	var rows:=panel(card,Vector2(20,205),Vector2(472,255),Color("#2d5ca4"))
+	round_panel(rows,0,Color("#2d5ca4"),0)
+	var upgrades=["lvl.2    10% slower run away speed","lvl.3    14% detection decrease","lvl.4    9% chance Common Egg drop","lvl.5    Extra 1 coins drop","lvl.6    Unlock Duck Pilot"]
+	for i in upgrades.size():
+		if i<3:
+			var strip:=ColorRect.new(); strip.color=Color("#27c943"); strip.position=Vector2(0,i*49); strip.size=Vector2(472,49); rows.add_child(strip)
+		make_label(rows,upgrades[i],Vector2(14,8+i*49),18)
+	var up:=menu_button(card,"UPGRADE\n◇ 1000",Vector2(105,500),Vector2(302,105),Color("#c83fe0")); up.add_theme_font_size_override("font_size",28)
+	up.pressed.connect(upgrade_duck)
+
+func upgrade_duck()->void:
+	if coins>=1000:
+		coins-=1000; duck_level+=1; show_menu("duck")
+
+func menu_button(parent:Node,text:String,pos:Vector2,size:Vector2,color:Color)->Button:
+	var b:=Button.new(); b.text=text; b.position=pos; b.size=size
+	b.add_theme_font_size_override("font_size",24); b.add_theme_color_override("font_color",Color.WHITE); b.add_theme_color_override("font_shadow_color",Color("#452861")); b.add_theme_constant_override("shadow_offset_x",2); b.add_theme_constant_override("shadow_offset_y",3)
+	var normal:=StyleBoxFlat.new(); normal.bg_color=color; normal.border_width_left=4; normal.border_width_right=4; normal.border_width_top=4; normal.border_width_bottom=8; normal.border_color=color.darkened(.28)
+	var pressed:=normal.duplicate(); pressed.bg_color=color.darkened(.12); pressed.border_width_bottom=4
+	b.add_theme_stylebox_override("normal",normal); b.add_theme_stylebox_override("hover",normal); b.add_theme_stylebox_override("pressed",pressed)
+	parent.add_child(b); return b
+
+func round_panel(p:Panel,radius:int,color:Color,border:int)->void:
+	var sb:=p.get_theme_stylebox("panel") as StyleBoxFlat
+	sb.bg_color=color; sb.corner_radius_top_left=radius; sb.corner_radius_top_right=radius; sb.corner_radius_bottom_left=radius; sb.corner_radius_bottom_right=radius
+	sb.border_width_left=border; sb.border_width_right=border; sb.border_width_top=border; sb.border_width_bottom=border
 func make_label(parent:Node,text:String,pos:Vector2,size:int,width:=0.0,align:=HORIZONTAL_ALIGNMENT_LEFT)->Label:
 	var l:=Label.new(); l.text=text; l.position=pos; l.add_theme_font_size_override("font_size",size); l.add_theme_color_override("font_color",Color.WHITE); l.add_theme_color_override("font_shadow_color",Color(0.1,0.1,0.2,.75)); l.add_theme_constant_override("shadow_offset_x",3); l.add_theme_constant_override("shadow_offset_y",3)
 	if width>0: l.size=Vector2(width,size+12); l.horizontal_alignment=align
@@ -217,25 +365,35 @@ func panel(parent:Node,pos:Vector2,size:Vector2,color:Color)->Panel:
 func _input(e:InputEvent)->void:
 	if e is InputEventScreenTouch:
 		dragging=e.pressed
-		if e.pressed and game_state!="play": start_game()
+		if e.pressed and game_state=="over": start_game()
 	elif e is InputEventScreenDrag and game_state=="play":
 		target_position.x=clamp(target_position.x+e.relative.x*.018,-5.4,5.4)
 		target_position.z=clamp(target_position.z+e.relative.y*.018,-5.0,5.0)
 	elif e is InputEventMouseButton:
 		dragging=e.pressed
-		if e.pressed and game_state!="play": start_game()
+		if e.pressed and game_state=="over": start_game()
 	elif e is InputEventMouseMotion and dragging and game_state=="play":
 		target_position.x=clamp(target_position.x+e.relative.x*.018,-5.4,5.4)
 		target_position.z=clamp(target_position.z+e.relative.y*.018,-5.0,5.0)
 
+func toggle_pause()->void:
+	if game_state!="play": return
+	get_tree().paused=not get_tree().paused
+	pause_button.text=">" if get_tree().paused else "II"
+
 func start_game()->void:
 	game_state="play"; score=0; combo=0; time_left=60; charge=0; frenzy=0; target_kind=rng.randi_range(0,3)
-	title_panel.visible=false; result_panel.visible=false
+	menu_root.visible=false; game_ui.visible=true; result_panel.visible=false; pause_button.visible=true; camera.size=19.0; create_tween().tween_property(camera,"size",15.5,.8).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 func _process(d:float)->void:
 	ship.position=ship.position.lerp(target_position,min(1.0,d*8.0))
 	ship.position.y=2.7+sin(Time.get_ticks_msec()/180.0)*.08
 	ship.rotation.y+=d*.45
+	if game_state=="play":
+		var camera_goal:=Vector3(ship.position.x,12.5,11.0+ship.position.z)
+		camera.position=camera.position.lerp(camera_goal,min(1.0,d*2.8))
+		camera.look_at(Vector3(ship.position.x,0,ship.position.z))
+		camera.size=lerp(camera.size,14.2 if frenzy>0 else 15.5,min(1.0,d*2.0))
 	beam.visible=dragging and game_state=="play"
 	if game_state=="play":
 		time_left-=d; frenzy=max(0.0,frenzy-d)
@@ -264,18 +422,27 @@ func abduct(d:float)->void:
 		var kind:int=chosen.get_meta("kind")
 		var good:=kind==target_kind or frenzy>0
 		if good:
-			combo+=1; score+=100*mini(5,1+combo/4)*(2 if frenzy>0 else 1); charge=min(100,charge+12)
+			combo+=1; var gain:=100*mini(5,1+floori(combo/4.0))*(2 if frenzy>0 else 1); score+=gain; charge=min(100,charge+12); pop_feedback("+%d"%gain,Color("#ffffff"),chosen.global_position)
 			if combo%5==0:target_kind=rng.randi_range(0,3)
 		else:
-			combo=0; score=max(0,score-75); time_left=max(0,time_left-2)
+			combo=0; score=max(0,score-75); time_left=max(0,time_left-2); pop_feedback("MISS",Color("#ff4e62"),chosen.global_position)
 		creatures.erase(chosen); chosen.queue_free(); spawn_creature()
 
 func update_hud()->void:
-	score_label.text="%05d"%score; timer_label.text="%02d"%ceili(time_left); target_label.text="BEAM: "+KINDS[target_kind]; combo_label.text="COMBO %d"%combo; frenzy_bar.value=charge
-	if frenzy>0:target_label.text="FRENZY %.1f"%frenzy
+	score_label.text=str(score); target_label.text=KINDS[target_kind]
+	if frenzy>0:target_label.text="FRENZY"
+
+func pop_feedback(message:String,color:Color,world_pos:Vector3)->void:
+	var l:=make_label(hud_root,message,camera.unproject_position(world_pos),32,150,HORIZONTAL_ALIGNMENT_CENTER)
+	l.add_theme_color_override("font_color",color)
+	l.position-=Vector2(75,0)
+	var tw:=create_tween().set_parallel()
+	tw.tween_property(l,"position",l.position-Vector2(0,85),.7).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(l,"modulate:a",0.0,.7)
+	tw.chain().tween_callback(l.queue_free)
 
 func finish_game()->void:
-	game_state="over"; dragging=false; beam.visible=false
+	game_state="over"; dragging=false; beam.visible=false; camera.size=18.0; game_ui.visible=false
 	if score>best:
 		best=score
 		var f:=FileAccess.open("user://best3d.txt",FileAccess.WRITE); f.store_string(str(best))

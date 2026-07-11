@@ -1,18 +1,38 @@
-# Godot 4+ specific ignores
+# Godot 4 generated state
 .godot/
+.godot-user/
+.import/
+*.tmp
+*.log
+logs/
+
+# Local previews and test captures
+.preview/
+
+# Android-generated output
 /android/
+build/
+*.apk
+*.apk.idsig
+*.aab
+*.keystore
 .nomedia
 
-# Godot-specific ignores
-.import/
+# Local export credentials
 export.cfg
 export_credentials.cfg
-*.tmp
 
-# Imported translations (automatically generated from CSV files)
+# Imported translations
 *.translation
 
-# Mono-specific ignores
+# C# / Mono generated state
 .mono/
 data_*/
 mono_crash.*.json
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
