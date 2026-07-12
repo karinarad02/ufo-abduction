@@ -1,16 +1,19 @@
 extends Node3D
 
-const KINDS := ["COW", "CHICKEN", "PIG", "SHEEP"]
-const KIND_COLORS := [Color("#f4f0df"), Color("#ffd83f"), Color("#f38ca2"), Color("#d5d5d0")]
+const KINDS := ["COW", "CHICKEN", "PIG", "SHEEP", "CORN", "FRUIT"]
+const KIND_COLORS := [Color("#f4f0df"), Color("#ffd83f"), Color("#f38ca2"), Color("#d5d5d0"), Color("#f1c82f"), Color("#ed4f62")]
 var rng := RandomNumberGenerator.new()
 var ship: Node3D
+var ship_sprite: Sprite3D
+var charge_segments: Array[MeshInstance3D] = []
 var beam: MeshInstance3D
 var camera: Camera3D
 var target_position := Vector3(0, 2.7, 0)
 var creatures: Array[Node3D] = []
+var hazards: Array[Node3D] = []
 var particles: Array[Dictionary] = []
 var dragging := false
-var game_state := "title"
+var game_state := "boot"
 var score := 0
 var best := 0
 var combo := 0
@@ -34,6 +37,23 @@ var game_ui: Control
 var gems := 55
 var coins := 1195
 var duck_level := 4
+var level := 1
+var lives := 3
+var level_progress := 0
+var level_goal := 600
+var tutorial_panel: Control
+var intro_overlay: Control
+var intro_rings: Array[Label] = []
+var arrival_rings: Array[MeshInstance3D] = []
+var arrival_flash: MeshInstance3D
+var intro_time := 0.0
+var intro_landed := false
+var ring_center := Vector3(0,2.7,0)
+var portal_open := false
+var boundary_alert: Label3D
+var fire_visual: Node3D
+var burning := false
+var burn_time := 0.0
 
 func _ready() -> void:
 	rng.randomize()
@@ -41,7 +61,7 @@ func _ready() -> void:
 		best = int(FileAccess.get_file_as_string("user://best3d.txt"))
 	build_world()
 	build_ui()
-	for i in 16: spawn_creature()
+	populate_level()
 	set_process(true)
 
 func mat(color: Color, emission := Color.BLACK, transparent := false) -> StandardMaterial3D:
@@ -88,45 +108,51 @@ func build_world() -> void:
 	environment.background_color = Color("#79c9f4")
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.ambient_light_color = Color("#d9f3ff")
-	environment.ambient_light_energy = 1.15
-	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	environment.ambient_light_energy = 0.52
+	environment.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 	env.environment = environment
 	add_child(env)
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-58, -35, 0)
-	sun.light_color = Color("#fff3c4")
-	sun.light_energy = 1.25
+	sun.light_color = Color("#ffffff")
+	sun.light_energy = 0.62
 	sun.shadow_enabled = true
 	add_child(sun)
 
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = 15.5
-	camera.position = Vector3(0, 12.5, 11)
+	camera.size = 14.8
+	camera.position = Vector3(0, 14.0, 10.0)
 	camera.look_at_from_position(camera.position, Vector3(0, 0, 0))
 	add_child(camera)
 
 	# Layered floating island.
 	cylinder(self, 7.25, 1.25, Vector3(0,-0.85,0), Color("#8a542f"), 8)
 	cylinder(self, 7.05, .72, Vector3(0,-0.22,0), Color("#b77842"), 8)
-	cylinder(self, 6.95, .32, Vector3(0,.18,0), Color("#7fc948"), 8)
-	cylinder(self, 6.82, .16, Vector3(0,.39,0), Color("#9ee25d"), 8)
+	cylinder(self, 6.95, .32, Vector3(0,.18,0), Color("#438d28"), 8)
+	cylinder(self, 6.82, .16, Vector3(0,.39,0), Color("#5cad35"), 8)
 
 	# Pond, well, barn, crop plot and fences.
-	cylinder(self, 1.25, .06, Vector3(-3.7,.58,-2.7), Color("#47bfe4"), 12)
-	for i in 10:
-		var a := i*TAU/10.0
-		box(self, Vector3(.42,.35,.6), Vector3(-3.7+cos(a)*1.3,.68,-2.7+sin(a)*1.3), Color("#aeb4ad"), Vector3(0,-a,0))
+	# Compact raised stone well from reference 1: about one cow-length wide.
+	cylinder(self, .62, .08, Vector3(-3.7,.72,-2.7), Color("#39bce1"), 10)
+	for i in 8:
+		var a := i*TAU/8.0
+		var stone_color:=Color("#9ba6a1") if i%2==0 else Color("#858f8c")
+		box(self,Vector3(.34,.46,.34),Vector3(-3.7+cos(a)*.72,.77,-2.7+sin(a)*.72),stone_color,Vector3(0,-a,0))
+	# Dark inner lip makes the water opening read at the steeper camera angle.
+	for i in 8:
+		var a := i*TAU/8.0
+		box(self,Vector3(.25,.12,.18),Vector3(-3.7+cos(a)*.56,1.02,-2.7+sin(a)*.56),Color("#c0c8c2"),Vector3(0,-a,0))
 	box(self, Vector3(2.2,1.65,1.8), Vector3(3.8,1.2,-2.7), Color("#d34f4c"))
 	var roof := box(self, Vector3(2.65,.35,2.25), Vector3(3.8,2.15,-2.7), Color("#79364e"))
 	roof.rotation_degrees.z = 7
 	box(self, Vector3(.75,1.25,.08), Vector3(3.8,1.0,-1.77), Color("#733848"))
-	box(self, Vector3(2.4,.12,2.2), Vector3(3.3,.58,3.3), Color("#6ea943"))
-	for x in 4:
-		for z in 4:
-			var crop := cylinder(self,.12,.65,Vector3(2.45+x*.55,.95,2.45+z*.52),Color("#f4c442"),6)
-			crop.rotation_degrees.z = rng.randf_range(-12,12)
+	# Bordered red-soil corn plots, each stalk collected independently.
+	for plot_pos in [Vector3(3.25,.58,3.25),Vector3(.35,.58,4.15)]:
+		box(self,Vector3(2.30,.12,1.95),plot_pos,Color("#c95d32"))
+		box(self,Vector3(2.42,.055,.12),plot_pos+Vector3(0,.09,.96),Color("#f0a037")); box(self,Vector3(2.42,.055,.12),plot_pos+Vector3(0,.09,-.96),Color("#f0a037"))
+		box(self,Vector3(.12,.055,1.95),plot_pos+Vector3(1.15,.09,0),Color("#f0a037")); box(self,Vector3(.12,.055,1.95),plot_pos+Vector3(-1.15,.09,0),Color("#f0a037"))
 	for side in [-1,1]:
 		for i in 6:
 			box(self,Vector3(.15,.7,.15),Vector3(side*6.1,.9,-3.3+i*1.1),Color("#a36a39"))
@@ -138,14 +164,37 @@ func build_ship() -> void:
 	ship = Node3D.new()
 	ship.position = target_position
 	add_child(ship)
-	var saucer := cylinder(ship, .72, .22, Vector3.ZERO, Color("#526bdd"), 16)
-	saucer.scale.z = 1.25
-	cylinder(ship,.48,.24,Vector3(0,.2,0),Color("#75dcf4"),16)
-	cylinder(ship,.32,.2,Vector3(0,.34,0),Color("#f3a7dc"),12)
-	for i in 8:
-		var a:=i*TAU/8.0
-		var light:=cylinder(ship,.055,.05,Vector3(cos(a)*.58,-.13,sin(a)*.73),Color("#ffe754"),8)
-		light.material_override=mat(Color("#ffe754"),Color("#ffe754"))
+	# Chunky, faceted saucer matching the supplied app icon.
+	var lower_hull:=cylinder(ship,1.03,.34,Vector3(0,-.13,0),Color("#276ab8"),10)
+	lower_hull.scale.z=.78
+	var upper_hull:=cylinder(ship,.92,.30,Vector3(0,.08,0),Color("#328ee8"),10)
+	upper_hull.scale.z=.78
+	var rim:=cylinder(ship,1.08,.11,Vector3(0,.02,0),Color("#174a87"),10)
+	rim.scale.z=.78
+	# Warm glowing intake on the underside.
+	var intake:=cylinder(ship,.39,.045,Vector3(0,-.34,.18),Color("#ffe990"),16)
+	intake.scale.z=.58; intake.material_override=mat(Color("#ffe990"),Color("#ffe778"))
+	var intake_rim:=cylinder(ship,.47,.035,Vector3(0,-.36,.18),Color("#f59bc8"),16)
+	intake_rim.scale.z=.58; intake_rim.material_override=mat(Color("#f59bc8"),Color("#f36cb8"))
+	# Pink square pilot, face and side ears inside the canopy.
+	box(ship,Vector3(.72,.55,.38),Vector3(0,.50,.05),Color("#e5a6e9"))
+	box(ship,Vector3(.13,.28,.12),Vector3(-.43,.49,.08),Color("#cd8bdc"))
+	box(ship,Vector3(.13,.28,.12),Vector3(.43,.49,.08),Color("#cd8bdc"))
+	box(ship,Vector3(.07,.17,.035),Vector3(-.22,.54,.265),Color("#487b66"))
+	box(ship,Vector3(.07,.17,.035),Vector3(.22,.54,.265),Color("#487b66"))
+	box(ship,Vector3(.20,.10,.04),Vector3(0,.36,.27),Color("#f06462"))
+	# Pale cyan glass canopy with a strong navy outline.
+	var canopy:=MeshInstance3D.new(); var glass:=SphereMesh.new()
+	glass.radius=.67; glass.height=1.05; glass.radial_segments=10; glass.rings=6
+	canopy.mesh=glass; canopy.position=Vector3(0,.48,0); canopy.scale.z=.62; canopy.material_override=mat(Color(0.72,1.0,1.0,.28),Color.BLACK,true); ship.add_child(canopy)
+	box(ship,Vector3(.09,.62,.09),Vector3(-.64,.50,.04),Color("#174a87"),Vector3(0,0,-.18))
+	box(ship,Vector3(.09,.62,.09),Vector3(.64,.50,.04),Color("#174a87"),Vector3(0,0,.18))
+	box(ship,Vector3(.92,.09,.09),Vector3(0,.94,.04),Color("#174a87"))
+	# Yellow and pink glowing side markers.
+	var left_light:=box(ship,Vector3(.28,.28,.055),Vector3(-.65,.12,.63),Color("#ffe354"),Vector3(0,0,.78))
+	left_light.material_override=mat(Color("#ffe354"),Color("#ffe354"))
+	var right_light:=box(ship,Vector3(.28,.28,.055),Vector3(.65,.12,.63),Color("#fa62ec"),Vector3(0,0,.78))
+	right_light.material_override=mat(Color("#fa62ec"),Color("#fa62ec"))
 	beam = MeshInstance3D.new()
 	var cone := CylinderMesh.new()
 	cone.top_radius=.13; cone.bottom_radius=1.0; cone.height=2.65; cone.radial_segments=20
@@ -154,44 +203,202 @@ func build_ship() -> void:
 	beam.material_override=mat(Color(0.72,0.35,0.94,.3),Color("#a252df"),true)
 	beam.visible=false
 	ship.add_child(beam)
-	for i in 24:
-		var a:=i*TAU/24.0
-		var tile:=box(ship,Vector3(.18,.035,.38),Vector3(cos(a)*.92,-2.28,sin(a)*.92),Color("#743a91") if i%3 else Color("#f0c52d"))
-		tile.rotation.y=-a
+	# Keep the gameplay craft fully 3D; the sprite node only carries bank state.
+	for child in ship.get_children():
+		if child is MeshInstance3D and child!=beam: child.visible=true
+	ship_sprite=Sprite3D.new(); ship_sprite.visible=false
+	ship.add_child(ship_sprite)
+	boundary_alert=Label3D.new(); boundary_alert.text="!"; boundary_alert.font_size=96; boundary_alert.modulate=Color("#ff3d48"); boundary_alert.outline_modulate=Color.WHITE; boundary_alert.outline_size=12; boundary_alert.position=Vector3(0,1.55,0); boundary_alert.billboard=BaseMaterial3D.BILLBOARD_ENABLED; boundary_alert.visible=false; ship.add_child(boundary_alert)
+	fire_visual=Node3D.new(); fire_visual.visible=false; ship.add_child(fire_visual)
+	for q in [Vector3(-.48,.18,.18),Vector3(0,.32,.12),Vector3(.48,.16,.16)]:
+		box(fire_visual,Vector3(.22,.58,.18),q,Color("#ff5a22"),Vector3(0,0,q.x*.5))
+		box(fire_visual,Vector3(.12,.35,.12),q+Vector3(0,.25,0),Color("#ffe13d"),Vector3(0,0,-q.x*.4))
+	# Twelve loading tiles form the circular meter on the ground under the beam.
+	for i in 12:
+		var a:=i*TAU/12.0
+		var segment:=box(ship,Vector3(.20,.045,.34),Vector3(cos(a)*.98,-2.22,sin(a)*.98),Color("#7656a8"))
+		segment.rotation.y=-a; segment.material_override=mat(Color("#7656a8"),Color("#523878")); charge_segments.append(segment)
+	# Four softly glowing hoops with the stepped silhouette from the reference.
+	var ring_sizes:=[1.02,1.30,1.58,1.42]
+	for i in 4:
+		var ring:=MeshInstance3D.new(); var torus:=TorusMesh.new()
+		torus.inner_radius=.91; torus.outer_radius=1.0; torus.rings=32; torus.ring_segments=12
+		ring.mesh=torus; ring.scale=Vector3.ONE*ring_sizes[i]; ring.material_override=mat(Color(0.68,1.0,1.0,.76),Color("#8effff"),true); ring.visible=false
+		add_child(ring); arrival_rings.append(ring)
+	arrival_flash=MeshInstance3D.new(); var flash_mesh:=SphereMesh.new()
+	flash_mesh.radius=.72; flash_mesh.height=1.15; flash_mesh.radial_segments=20; flash_mesh.rings=10
+	arrival_flash.mesh=flash_mesh; arrival_flash.material_override=mat(Color(1.0,.91,.42,.42),Color("#ffe96b"),true); arrival_flash.visible=false; add_child(arrival_flash)
 
-func spawn_creature() -> void:
-	var kind:=rng.randi_range(0,3)
-	var p:=Vector3(rng.randf_range(-5.2,5.2),.72,rng.randf_range(-4.7,4.7))
-	while Vector2(p.x,p.z).length()>5.7 or (abs(p.x-3.8)<1.8 and abs(p.z+2.7)<1.7):
-		p=Vector3(rng.randf_range(-5.2,5.2),.72,rng.randf_range(-4.7,4.7))
+func animal_eye(parent:Node3D,pos:Vector3)->void:
+	box(parent,Vector3(.115,.16,.055),pos,Color("#171923"))
+	box(parent,Vector3(.035,.05,.018),pos+Vector3(-.024,.035,.034),Color("#ffffff"))
+
+func animal_leg(parent:Node3D,pos:Vector3,color:Color,hoof:Color)->void:
+	box(parent,Vector3(.17,.42,.17),pos,color)
+	box(parent,Vector3(.19,.13,.21),pos+Vector3(0,-.25,.025),hoof)
+
+func make_corn_model(parent:Node3D)->void:
+	# Small golden cuboid cob with layered green husks, matching the crop plots.
+	box(parent,Vector3(.10,.62,.10),Vector3(0,-.10,0),Color("#439443"))
+	box(parent,Vector3(.24,.46,.20),Vector3(0,.08,.02),Color("#f3ca2d"))
+	for y in [-.08,.05,.18]: box(parent,Vector3(.27,.055,.22),Vector3(0,y,.03),Color("#ffe45a"))
+	box(parent,Vector3(.34,.10,.14),Vector3(-.16,-.08,0),Color("#54a848"),Vector3(0,0,-.62))
+	box(parent,Vector3(.34,.10,.14),Vector3(.16,.02,0),Color("#54a848"),Vector3(0,0,.62))
+
+func spawn_corn_at(pos:Vector3)->void:
+	var root:=Node3D.new(); root.position=pos; root.set_meta("kind",4); root.set_meta("planted",true); add_child(root)
+	make_corn_model(root); creatures.append(root)
+
+func corn_positions()->Array[Vector3]:
+	var positions:Array[Vector3]=[]
+	for plot_pos in [Vector3(3.25,.94,3.25),Vector3(.35,.94,4.15)]:
+		for x in 3:
+			for z in 2: positions.append(Vector3(plot_pos.x-.68+x*.68,.94,plot_pos.z-.40+z*.80))
+	return positions
+
+func populate_level()->void:
+	portal_open=false
+	for old_hazard in hazards:
+		if is_instance_valid(old_hazard): old_hazard.queue_free()
+	hazards.clear()
+	# Corn uses fixed plot slots; roaming population is capped by usable island area.
+	var corn_slots:=mini(corn_positions().size(),6+level*2)
+	for i in corn_slots: spawn_corn_at(corn_positions()[i])
+	var unlocked_animals:=mini(4,2+floori((level-1)/2.0))
+	var allowed:Array[int]=[]
+	for kind in unlocked_animals: allowed.append(kind)
+	if level>=3: allowed.append(5) # Fruit joins once the player has space-management experience.
+	var featured:=allowed[rng.randi_range(0,allowed.size()-1)]
+	var roaming_capacity:=mini(16,7+level*2+rng.randi_range(-1,1))
+	for i in roaming_capacity:
+		var kind:=featured if i<2 or rng.randf()<.36 else allowed[rng.randi_range(0,allowed.size()-1)]
+		spawn_creature(kind)
+	for i in mini(4,1+floori(level/2.0)): spawn_hazard(i%2)
+	var present:Array[int]=[]
+	for c in creatures:
+		var kind:int=c.get_meta("kind")
+		if not present.has(kind): present.append(kind)
+	if not present.is_empty(): target_kind=present[rng.randi_range(0,present.size()-1)]
+
+func spawn_hazard(hazard_kind:int)->void:
+	var root:=Node3D.new(); var placed:=false
+	for attempt in 32:
+		var angle:=rng.randf_range(0,TAU); var radius:=rng.randf_range(2.0,5.2)
+		root.position=Vector3(cos(angle)*radius,.78,sin(angle)*radius)
+		if abs(root.position.x-3.25)>1.5 or abs(root.position.z-3.25)>1.3: placed=true; break
+	if not placed: return
+	root.set_meta("hazard",hazard_kind); add_child(root)
+	if hazard_kind==0:
+		box(root,Vector3(.48,.48,.48),Vector3.ZERO,Color("#171820"))
+		box(root,Vector3(.10,.34,.10),Vector3(.18,.37,0),Color("#79543c"),Vector3(0,0,-.55))
+		box(root,Vector3(.13,.13,.13),Vector3(.30,.52,0),Color("#ffe13d"))
+	else:
+		box(root,Vector3(.34,.62,.30),Vector3(0,.10,0),Color("#ff5729"))
+		box(root,Vector3(.20,.42,.20),Vector3(0,.42,0),Color("#ffe13d"),Vector3(0,0,.35))
+	hazards.append(root)
+
+func spawn_creature(kind_override:=-1) -> void:
+	var kind:int=kind_override if kind_override>=0 else rng.randi_range(0,KINDS.size()-1)
+	var p:=Vector3.ZERO; var found_space:=false
+	for attempt in 48:
+		p=Vector3(rng.randf_range(-5.2,5.2),.88,rng.randf_range(-4.7,4.7))
+		var blocked:bool=Vector2(p.x,p.z).length()>5.55 or (abs(p.x-3.8)<1.8 and abs(p.z+2.7)<1.7)
+		# Keep roaming entities out of both crop beds and away from existing objects.
+		blocked=blocked or (abs(p.x-3.25)<1.45 and abs(p.z-3.25)<1.25) or (abs(p.x-.35)<1.45 and abs(p.z-4.15)<1.25)
+		if not blocked:
+			for existing in creatures:
+				if is_instance_valid(existing) and Vector2(p.x-existing.position.x,p.z-existing.position.z).length()<.82:
+					blocked=true; break
+		if not blocked: found_space=true; break
+	if not found_space: return
 	var root:=Node3D.new()
 	root.position=p
+	root.rotation.y=rng.randf_range(-.22,.22)
 	root.set_meta("kind",kind)
-	root.set_meta("lift",0.0)
+	root.set_meta("move_dir",Vector2.from_angle(rng.randf_range(0,TAU)))
+	root.set_meta("move_timer",rng.randf_range(.4,2.4))
+	root.set_meta("walk_phase",rng.randf_range(0,TAU))
 	add_child(root)
-	var c: Color = KIND_COLORS[kind]
-	if kind==0:
-		box(root,Vector3(.72,.62,1.0),Vector3.ZERO,c)
-		box(root,Vector3(.62,.55,.52),Vector3(0,.15,-.63),c)
-		for q in [Vector3(-.22,-.42,-.28),Vector3(.22,-.42,-.28),Vector3(-.22,-.42,.28),Vector3(.22,-.42,.28)]: box(root,Vector3(.16,.55,.16),q,Color("#34303a"))
-		for q in [Vector3(-.23,.12,-.28),Vector3(.2,-.1,.2),Vector3(.25,.16,.38)]: box(root,Vector3(.2,.18,.22),q,Color("#2e3038"))
-		box(root,Vector3(.28,.17,.12),Vector3(0,.05,-.93),Color("#ef9ca5"))
-	elif kind==1:
-		box(root,Vector3(.55,.52,.58),Vector3.ZERO,c)
-		box(root,Vector3(.42,.42,.38),Vector3(0,.35,-.3),c)
-		box(root,Vector3(.18,.14,.25),Vector3(0,.32,-.6),Color("#ed7a31"))
-		for x in [-.18,.18]: box(root,Vector3(.07,.35,.07),Vector3(x,-.4,0),Color("#ed8a31"))
-	elif kind==2:
-		box(root,Vector3(.75,.58,.92),Vector3.ZERO,c)
-		box(root,Vector3(.62,.5,.5),Vector3(0,.12,-.62),c)
-		box(root,Vector3(.4,.22,.12),Vector3(0,.03,-.92),Color("#ffb0b7"))
-		for x in [-.22,.22]: box(root,Vector3(.15,.45,.15),Vector3(x,-.4,.2),Color("#b65f74"))
-	else:
-		box(root,Vector3(.78,.65,.92),Vector3.ZERO,c)
-		box(root,Vector3(.55,.5,.48),Vector3(0,.12,-.63),Color("#4c4b52"))
-		for x in [-.24,.24]: box(root,Vector3(.14,.45,.14),Vector3(x,-.42,.2),Color("#4c4b52"))
-	creatures.append(root)
 
+	if kind==0:
+		# Cute cube cow: oversized face, pink muzzle, ears, horns and irregular patches.
+		var cream:=Color("#f4f0df"); var dark:=Color("#33343b"); var pink:=Color("#eda18f")
+		box(root,Vector3(.88,.66,1.12),Vector3(0,0,-.05),cream)
+		box(root,Vector3(.76,.72,.62),Vector3(0,.20,.68),cream)
+		box(root,Vector3(.28,.18,.10),Vector3(-.49,.34,.68),pink)
+		box(root,Vector3(.28,.18,.10),Vector3(.49,.34,.68),pink)
+		box(root,Vector3(.13,.18,.12),Vector3(-.29,.62,.68),Color("#d9c47c"),Vector3(0,0,-.25))
+		box(root,Vector3(.13,.18,.12),Vector3(.29,.62,.68),Color("#d9c47c"),Vector3(0,0,.25))
+		box(root,Vector3(.52,.27,.12),Vector3(0,.02,1.01),pink)
+		box(root,Vector3(.07,.08,.025),Vector3(-.14,.02,1.08),Color("#7b4c4c"))
+		box(root,Vector3(.07,.08,.025),Vector3(.14,.02,1.08),Color("#7b4c4c"))
+		animal_eye(root,Vector3(-.22,.31,1.015)); animal_eye(root,Vector3(.22,.31,1.015))
+		box(root,Vector3(.30,.24,.035),Vector3(-.27,.15,.34),dark)
+		box(root,Vector3(.34,.26,.035),Vector3(.24,-.10,-.62),dark)
+		box(root,Vector3(.22,.20,.035),Vector3(.33,.18,-.35),dark)
+		for q in [Vector3(-.29,-.45,.31),Vector3(.29,-.45,.31),Vector3(-.29,-.45,-.31),Vector3(.29,-.45,-.31)]:
+			animal_leg(root,q,cream,dark)
+		box(root,Vector3(.09,.55,.09),Vector3(.40,.03,-.62),cream,Vector3(.55,0,0))
+		box(root,Vector3(.16,.16,.16),Vector3(.40,-.22,-.79),dark)
+	elif kind==1:
+		# Bright duckling with a big square head, tiny wings and orange webbed feet.
+		var yellow:=Color("#f2dc32"); var orange:=Color("#e99b27")
+		box(root,Vector3(.70,.62,.72),Vector3(0,-.02,-.02),yellow)
+		box(root,Vector3(.72,.68,.62),Vector3(0,.32,.48),Color("#f5e23b"))
+		box(root,Vector3(.34,.17,.20),Vector3(0,.22,.85),orange)
+		animal_eye(root,Vector3(-.22,.43,.80)); animal_eye(root,Vector3(.22,.43,.80))
+		box(root,Vector3(.18,.42,.42),Vector3(-.43,.0,.0),Color("#e5c92b"),Vector3(0,0,-.25))
+		box(root,Vector3(.18,.42,.42),Vector3(.43,.0,.0),Color("#e5c92b"),Vector3(0,0,.25))
+		box(root,Vector3(.22,.14,.34),Vector3(-.20,-.46,.16),orange)
+		box(root,Vector3(.22,.14,.34),Vector3(.20,-.46,.16),orange)
+		box(root,Vector3(.24,.28,.20),Vector3(0,.0,-.46),yellow,Vector3(.35,0,0))
+	elif kind==2:
+		# Round pink pig with floppy ears, cheek marks and a dimensional snout.
+		var pig:=Color("#ee999c"); var pig_light:=Color("#f6b0ae"); var hoof:=Color("#9e5966")
+		box(root,Vector3(.94,.68,1.12),Vector3(0,0,-.04),pig)
+		box(root,Vector3(.82,.74,.65),Vector3(0,.20,.66),pig_light)
+		box(root,Vector3(.24,.28,.16),Vector3(-.38,.56,.64),pig,Vector3(0,0,-.35))
+		box(root,Vector3(.24,.28,.16),Vector3(.38,.56,.64),pig,Vector3(0,0,.35))
+		box(root,Vector3(.52,.30,.16),Vector3(0,.04,1.02),Color("#f5aaa7"))
+		box(root,Vector3(.075,.10,.025),Vector3(-.14,.04,1.11),Color("#8c4f59"))
+		box(root,Vector3(.075,.10,.025),Vector3(.14,.04,1.11),Color("#8c4f59"))
+		animal_eye(root,Vector3(-.23,.34,1.01)); animal_eye(root,Vector3(.23,.34,1.01))
+		box(root,Vector3(.11,.06,.025),Vector3(-.31,.12,1.03),Color("#ef777f"))
+		box(root,Vector3(.11,.06,.025),Vector3(.31,.12,1.03),Color("#ef777f"))
+		for q in [Vector3(-.30,-.45,.30),Vector3(.30,-.45,.30),Vector3(-.30,-.45,-.30),Vector3(.30,-.45,-.30)]:
+			animal_leg(root,q,pig,hoof)
+		var tail:=box(root,Vector3(.10,.10,.40),Vector3(.35,.05,-.66),pig)
+		tail.rotation.x=.6
+	elif kind==3:
+		# Soft gray sheep built from chunky wool blocks around a small charcoal face.
+		var wool:=Color("#d4d4ce"); var wool_shadow:=Color("#b8bbb7"); var face:=Color("#62666b")
+		box(root,Vector3(.94,.72,1.08),Vector3(0,0,-.05),wool)
+		for q in [Vector3(-.38,.25,-.34),Vector3(.38,.25,-.34),Vector3(-.38,.25,.20),Vector3(.38,.25,.20),Vector3(0,.38,-.05)]:
+			box(root,Vector3(.42,.42,.45),q,wool_shadow if q.x>0 else wool)
+		box(root,Vector3(.64,.64,.54),Vector3(0,.15,.69),face)
+		box(root,Vector3(.24,.18,.12),Vector3(-.39,.30,.69),face,Vector3(0,0,-.28))
+		box(root,Vector3(.24,.18,.12),Vector3(.39,.30,.69),face,Vector3(0,0,.28))
+		animal_eye(root,Vector3(-.19,.29,.975)); animal_eye(root,Vector3(.19,.29,.975))
+		box(root,Vector3(.20,.10,.04),Vector3(0,.05,.99),Color("#393c42"))
+		for q in [Vector3(-.29,-.46,.28),Vector3(.29,-.46,.28),Vector3(-.29,-.46,-.28),Vector3(.29,-.46,-.28)]:
+			animal_leg(root,q,face,Color("#3e4247"))
+	elif kind==4:
+		make_corn_model(root)
+	else:
+		# Reference 1 uses a single large cubic crown with sparse orange fruit.
+		box(root,Vector3(.30,.72,.30),Vector3(0,-.22,0),Color("#7b4b2c"))
+		box(root,Vector3(1.46,1.02,1.38),Vector3(0,.38,0),Color("#16873f"))
+		box(root,Vector3(1.22,.18,1.16),Vector3(0,.94,0),Color("#24a54c"))
+		for q in [Vector3(-.42,.78,.70),Vector3(.34,.42,.72),Vector3(.69,.62,.18)]:
+			box(root,Vector3(.25,.25,.22),q,Color("#f37824"))
+			box(root,Vector3(.07,.13,.07),q+Vector3(0,.16,0),Color("#315d2e"))
+	if kind<4:
+		var alert:=Label3D.new(); alert.text="!"; alert.font_size=80; alert.modulate=Color("#ff3d48"); alert.outline_modulate=Color.WHITE; alert.outline_size=10; alert.position=Vector3(0,1.45,0); alert.billboard=BaseMaterial3D.BILLBOARD_ENABLED; alert.visible=false
+		root.add_child(alert); root.set_meta("alert",alert)
+	var base_scale:=1.14 if kind==0 else 1.0
+	root.set_meta("base_scale",base_scale)
+	root.scale=Vector3.ONE*base_scale
+	creatures.append(root)
 func build_ui() -> void:
 	var layer:=CanvasLayer.new()
 	add_child(layer)
@@ -218,6 +425,19 @@ func build_ui() -> void:
 	pause_button=Button.new(); pause_button.text="II"; pause_button.position=Vector2(465,20); pause_button.size=Vector2(56,56)
 	pause_button.add_theme_font_size_override("font_size",26); pause_button.add_theme_color_override("font_color",Color.WHITE)
 	pause_button.process_mode=Node.PROCESS_MODE_ALWAYS; pause_button.pressed.connect(toggle_pause); game_ui.add_child(pause_button)
+	tutorial_panel=Control.new(); tutorial_panel.position=Vector2.ZERO; tutorial_panel.size=Vector2(540,960); tutorial_panel.mouse_filter=Control.MOUSE_FILTER_IGNORE; game_ui.add_child(tutorial_panel)
+	make_label(tutorial_panel,"SLIDE TO SUCK",Vector2(0,750),25,540,HORIZONTAL_ALIGNMENT_CENTER)
+	make_label(tutorial_panel,"←     ▰     →",Vector2(0,795),34,540,HORIZONTAL_ALIGNMENT_CENTER)
+	tutorial_panel.visible=false
+	intro_overlay=Control.new(); intro_overlay.position=Vector2.ZERO; intro_overlay.size=Vector2(540,960); intro_overlay.mouse_filter=Control.MOUSE_FILTER_IGNORE; game_ui.add_child(intro_overlay)
+	var logo_shadow:=make_label(intro_overlay,"SUCK IT UP",Vector2(0,67),54,540,HORIZONTAL_ALIGNMENT_CENTER)
+	logo_shadow.add_theme_color_override("font_color",Color("#172438")); logo_shadow.add_theme_constant_override("outline_size",10); logo_shadow.add_theme_color_override("font_outline_color",Color("#172438"))
+	var logo:=make_label(intro_overlay,"SUCK IT UP",Vector2(0,58),54,540,HORIZONTAL_ALIGNMENT_CENTER)
+	logo.add_theme_color_override("font_color",Color("#42d7e8")); logo.add_theme_constant_override("outline_size",5); logo.add_theme_color_override("font_outline_color",Color("#101923"))
+	for i in 0:
+		var ring:=make_label(intro_overlay,"○",Vector2(0,330+i*62),130+i*26,540,HORIZONTAL_ALIGNMENT_CENTER)
+		ring.add_theme_color_override("font_color",Color(0.65,1.0,1.0,.72-i*.13)); intro_rings.append(ring)
+	intro_overlay.visible=false
 	result_panel=panel(root,Vector2(55,280),Vector2(430,300),Color("#35479bf2"))
 	make_label(result_panel,"SHIFT COMPLETE",Vector2(0,30),34,430,HORIZONTAL_ALIGNMENT_CENTER)
 	result_label=make_label(result_panel,"SCORE 0",Vector2(0,110),34,430,HORIZONTAL_ALIGNMENT_CENTER)
@@ -226,19 +446,85 @@ func build_ui() -> void:
 	result_panel.visible=false
 	game_ui.visible=false
 	build_menu_shell(root)
-	show_menu("home")
+	menu_root.visible=false
 	build_splash(root)
 
 func build_splash(root:Control)->void:
-	var splash:=Control.new(); splash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); splash.mouse_filter=Control.MOUSE_FILTER_STOP; root.add_child(splash)
-	var bg:=ColorRect.new(); bg.color=Color("#d8fff1"); bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); splash.add_child(bg)
-	var mascot:=panel(splash,Vector2(165,250),Vector2(210,300),Color("#cfd6d5"))
-	round_panel(mascot,35,Color("#cfd6d5"),0)
-	make_label(mascot,"o   o",Vector2(0,100),42,210,HORIZONTAL_ALIGNMENT_CENTER)
-	make_label(mascot,"u",Vector2(0,145),36,210,HORIZONTAL_ALIGNMENT_CENTER)
-	make_label(splash,"UFO ABDUCTION",Vector2(0,610),34,540,HORIZONTAL_ALIGNMENT_CENTER)
-	var tw:=create_tween(); tw.tween_interval(1.35); tw.tween_property(splash,"modulate:a",0.0,.45); tw.tween_callback(splash.queue_free)
+	var splash:=Control.new(); splash.position=Vector2.ZERO; splash.size=Vector2(540,960); splash.mouse_filter=Control.MOUSE_FILTER_STOP; root.add_child(splash)
+	var bg:=ColorRect.new(); bg.color=Color("#f6f6f6"); bg.position=Vector2.ZERO; bg.size=Vector2(540,960); splash.add_child(bg)
+	var app_logo:=Control.new(); app_logo.position=Vector2.ZERO; app_logo.size=Vector2(540,960); splash.add_child(app_logo)
+	var ufo_logo:=TextureRect.new(); ufo_logo.expand_mode=TextureRect.EXPAND_IGNORE_SIZE; ufo_logo.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED; ufo_logo.texture=load("res://assets/branding/ufo-logo-generated.png"); ufo_logo.position=Vector2(50,245); ufo_logo.size=Vector2(440,402); app_logo.add_child(ufo_logo)
+	var company_logo:=Control.new(); company_logo.position=Vector2.ZERO; company_logo.size=Vector2(540,960); company_logo.visible=false; splash.add_child(company_logo)
+	var kiseki_logo:=TextureRect.new(); kiseki_logo.expand_mode=TextureRect.EXPAND_IGNORE_SIZE; kiseki_logo.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED; kiseki_logo.texture=load("res://assets/branding/kiseki-logo-generated.png"); kiseki_logo.position=Vector2(42,330); kiseki_logo.size=Vector2(456,289); company_logo.add_child(kiseki_logo)
+	var tw:=create_tween()
+	tw.tween_interval(1.8)
+	tw.tween_callback(func(): app_logo.visible=false; company_logo.visible=true)
+	tw.tween_interval(1.8)
+	tw.tween_property(splash,"modulate:a",0.0,.45)
+	tw.tween_callback(func(): splash.queue_free(); begin_game_intro())
 
+func begin_game_intro()->void:
+	game_state="intro"; score=0; combo=0; level=1; lives=3; level_progress=0; level_goal=50; time_left=45; charge=0; frenzy=0
+	update_charge_segments()
+	menu_root.visible=false; game_ui.visible=true; result_panel.visible=false; pause_button.visible=false
+	intro_overlay.visible=false; tutorial_panel.visible=false; intro_time=0.0; intro_landed=false
+	target_position=Vector3(0,2.7,0); ship.scale=Vector3(.78,.78,.78); ship.position=Vector3(0,6.8,-1.35); camera.size=14.8
+	ring_center=target_position
+	for ring in arrival_rings: ring.visible=true
+	arrival_flash.visible=true; arrival_flash.position=Vector3(0,1.8,0); arrival_flash.scale=Vector3(.08,.08,.08)
+	var tw:=create_tween().set_parallel(true)
+	tw.tween_property(arrival_flash,"scale",Vector3(1.15,1.15,1.15),.34).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(ship,"scale",Vector3.ONE,.30).set_delay(.30).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(ship,"position",target_position,.30).set_delay(.30).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.chain().tween_callback(finish_intro_arrival)
+
+func finish_intro_arrival()->void:
+	if game_state!="intro": return
+	intro_landed=true; intro_overlay.visible=true; tutorial_panel.visible=true; beam.visible=true; arrival_flash.visible=false
+	intro_overlay.position=Vector2(540,0); intro_overlay.modulate.a=1.0; tutorial_panel.modulate.a=0.0
+	var reveal:=create_tween().set_parallel(true)
+	reveal.tween_property(intro_overlay,"position",Vector2.ZERO,.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	reveal.tween_property(tutorial_panel,"modulate:a",1.0,.28).set_delay(.08)
+
+func activate_intro_control()->void:
+	if game_state!="intro": return
+	game_state="play"; intro_overlay.visible=false; tutorial_panel.visible=false; pause_button.visible=true; dragging=true
+	for ring in arrival_rings: ring.visible=false
+	arrival_flash.visible=false
+
+func start_level_portal()->void:
+	if game_state!="play": return
+	game_state="portal"; dragging=false; beam.visible=false; portal_open=false
+	for ring in arrival_rings: ring.visible=true
+	arrival_flash.visible=true; arrival_flash.position=Vector3(ring_center.x,1.8,ring_center.z); arrival_flash.scale=Vector3(.12,.12,.12)
+	var exit_tween:=create_tween()
+	exit_tween.tween_property(arrival_flash,"scale",Vector3(1.25,1.25,1.25),.24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	exit_tween.parallel().tween_property(ship,"position",Vector3(ring_center.x,7.2,ring_center.z),.58).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	exit_tween.parallel().tween_property(ship,"scale",Vector3(.28,.28,.28),.58)
+	exit_tween.tween_callback(complete_level_portal)
+
+func complete_level_portal()->void:
+	level+=1; level_progress=0; level_goal=roundi(level_goal*1.25); time_left=45.0; target_kind=rng.randi_range(0,KINDS.size()-1)
+	populate_level()
+	target_position=Vector3(0,2.7,0); ring_center=target_position; ship.position=Vector3(0,7.2,-1.0); ship.scale=Vector3(.45,.45,.45)
+	arrival_flash.position=Vector3(0,1.8,0); arrival_flash.scale=Vector3(1.1,1.1,1.1)
+	var enter_tween:=create_tween().set_parallel(true)
+	enter_tween.tween_property(ship,"position",target_position,.48).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	enter_tween.tween_property(ship,"scale",Vector3.ONE,.48).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	enter_tween.chain().tween_callback(finish_level_portal)
+
+func finish_level_portal()->void:
+	game_state="play"; arrival_flash.visible=false
+	for ring in arrival_rings: ring.visible=false
+	pop_feedback("LEVEL %d"%level,Color("#ffe33d"),ship.global_position)
+
+func open_exit_portal()->void:
+	if portal_open or game_state!="play": return
+	portal_open=true; dragging=false; beam.visible=false
+	ring_center=Vector3(-3.4,2.7,2.6) if ship.position.x>0 else Vector3(3.4,2.7,2.6)
+	for ring in arrival_rings: ring.visible=true
+	arrival_flash.visible=true; arrival_flash.position=Vector3(ring_center.x,1.8,ring_center.z); arrival_flash.scale=Vector3(.95,.95,.95)
+	pop_feedback("PORTAL OPEN",Color("#b8ffff"),ring_center)
 func build_menu_shell(root:Control)->void:
 	menu_root=Control.new(); menu_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); root.add_child(menu_root)
 	var bg:=ColorRect.new(); bg.color=Color("#8a55c4"); bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); menu_root.add_child(bg)
@@ -365,16 +651,18 @@ func panel(parent:Node,pos:Vector2,size:Vector2,color:Color)->Panel:
 func _input(e:InputEvent)->void:
 	if e is InputEventScreenTouch:
 		dragging=e.pressed
+		if e.pressed and game_state=="intro": activate_intro_control()
 		if e.pressed and game_state=="over": start_game()
 	elif e is InputEventScreenDrag and game_state=="play":
-		target_position.x=clamp(target_position.x+e.relative.x*.018,-5.4,5.4)
-		target_position.z=clamp(target_position.z+e.relative.y*.018,-5.0,5.0)
+		target_position.x=clamp(target_position.x+e.relative.x*.018,-7.4,7.4)
+		target_position.z=clamp(target_position.z+e.relative.y*.018,-7.0,7.0)
 	elif e is InputEventMouseButton:
 		dragging=e.pressed
+		if e.pressed and game_state=="intro": activate_intro_control()
 		if e.pressed and game_state=="over": start_game()
 	elif e is InputEventMouseMotion and dragging and game_state=="play":
-		target_position.x=clamp(target_position.x+e.relative.x*.018,-5.4,5.4)
-		target_position.z=clamp(target_position.z+e.relative.y*.018,-5.0,5.0)
+		target_position.x=clamp(target_position.x+e.relative.x*.018,-7.4,7.4)
+		target_position.z=clamp(target_position.z+e.relative.y*.018,-7.0,7.0)
 
 func toggle_pause()->void:
 	if game_state!="play": return
@@ -382,55 +670,161 @@ func toggle_pause()->void:
 	pause_button.text=">" if get_tree().paused else "II"
 
 func start_game()->void:
-	game_state="play"; score=0; combo=0; time_left=60; charge=0; frenzy=0; target_kind=rng.randi_range(0,3)
-	menu_root.visible=false; game_ui.visible=true; result_panel.visible=false; pause_button.visible=true; camera.size=19.0; create_tween().tween_property(camera,"size",15.5,.8).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	begin_game_intro()
 
 func _process(d:float)->void:
-	ship.position=ship.position.lerp(target_position,min(1.0,d*8.0))
-	ship.position.y=2.7+sin(Time.get_ticks_msec()/180.0)*.08
-	ship.rotation.y+=d*.45
+	if game_state=="intro" or game_state=="portal" or portal_open:
+		intro_time+=d
+		for i in arrival_rings.size():
+			var ring:=arrival_rings[i]
+			var ring_offsets:=[.70,.05,-.65,-1.32]
+			var ring_sizes:=[1.02,1.30,1.58,1.42]
+			ring.position=Vector3(ring_center.x,ring_center.y+ring_offsets[i]+sin(intro_time*2.4-i*.7)*.07,ring_center.z)
+			var pulse:=1.0+sin(intro_time*3.0-i*.55)*.035
+			ring.scale=Vector3.ONE*ring_sizes[i]*pulse
+			ring.rotation.y+=d*(.32 if i%2==0 else -.28)
+			var ring_mat:=ring.material_override as StandardMaterial3D
+			ring_mat.albedo_color=Color(0.68,1.0,1.0,.76)
+	if game_state!="intro" and game_state!="portal":
+		var previous_x:=ship.position.x
+		ship.position=ship.position.lerp(target_position,min(1.0,d*8.0))
+		ship.position.y=2.7+sin(Time.get_ticks_msec()/180.0)*.08
+		var horizontal_speed:=(ship.position.x-previous_x)/maxf(d,.001)
+		ship.rotation.z=lerp(ship.rotation.z,clamp(-horizontal_speed*.035,-.13,.13),min(1.0,d*8.0))
+	if game_state=="intro" or game_state=="portal": ship.rotation.z=lerp(ship.rotation.z,0.0,min(1.0,d*10.0))
 	if game_state=="play":
-		var camera_goal:=Vector3(ship.position.x,12.5,11.0+ship.position.z)
+		var camera_goal:=Vector3(ship.position.x,14.0,10.0+ship.position.z)
 		camera.position=camera.position.lerp(camera_goal,min(1.0,d*2.8))
 		camera.look_at(Vector3(ship.position.x,0,ship.position.z))
-		camera.size=lerp(camera.size,14.2 if frenzy>0 else 15.5,min(1.0,d*2.0))
-	beam.visible=dragging and game_state=="play"
+		camera.size=lerp(camera.size,13.7 if frenzy>0 else 14.8,min(1.0,d*2.0))
+		update_animals(d)
+		if portal_open and Vector2(ship.position.x-ring_center.x,ship.position.z-ring_center.z).length()<1.05: start_level_portal()
+		boundary_alert.visible=Vector2(ship.position.x,ship.position.z).length()>5.8
+		if burning:
+			burn_time-=d; fire_visual.visible=true; fire_visual.scale=Vector3.ONE*(1.0+sin(Time.get_ticks_msec()/80.0)*.08)
+			if Vector2(ship.position.x+3.7,ship.position.z+2.7).length()<1.35:
+				burning=false; fire_visual.visible=false; pop_feedback("EXTINGUISHED",Color("#72e8ff"),ship.global_position)
+			elif burn_time<=0.0: destroy_ufo()
+	beam.visible=(game_state=="intro" and intro_landed) or (dragging and game_state=="play")
 	if game_state=="play":
 		time_left-=d; frenzy=max(0.0,frenzy-d)
-		if charge>=100 and frenzy<=0: frenzy=7; charge=0; beam.material_override=mat(Color(1,.82,.18,.34),Color("#ffd331"),true)
+		if charge>=100 and frenzy<=0: frenzy=7; charge=0; update_charge_segments(); beam.material_override=mat(Color(1,.82,.18,.34),Color("#ffd331"),true)
 		if frenzy<=0 and beam.material_override.albedo_color.r>.9: beam.material_override=mat(Color(.72,.35,.94,.3),Color("#a252df"),true)
-		if dragging: abduct(d)
+		if dragging: abduct(d); abduct_hazards(d)
 		if time_left<=0: finish_game()
 		update_hud()
+func update_animals(d:float)->void:
 	for c in creatures:
-		if is_instance_valid(c):
-			c.rotation.y+=sin(Time.get_ticks_msec()/500.0+c.position.x)*d*.18
+		if not is_instance_valid(c) or int(c.get_meta("kind"))>=4: continue
+		var offset:=Vector2(c.position.x-ship.position.x,c.position.z-ship.position.z)
+		if dragging and not c.get_meta("fleeing",false) and offset.length()>=1.18 and offset.length()<3.0:
+			c.set_meta("fleeing",true); c.set_meta("flee_dir",offset.normalized()); (c.get_meta("alert") as Label3D).visible=true
+		if c.get_meta("fleeing",false):
+			var direction:Vector2=c.get_meta("flee_dir")
+			c.position.x+=direction.x*d*3.4; c.position.z+=direction.y*d*3.4
+			c.rotation.y=lerp_angle(c.rotation.y,atan2(direction.x,direction.y),min(1.0,d*12.0))
+			var phase:float=c.get_meta("walk_phase")+d*18.0; c.set_meta("walk_phase",phase); c.position.y=.88+abs(sin(phase))*.11
+			if Vector2(c.position.x,c.position.z).length()>6.8:
+				var angle:=rng.randf_range(0,TAU); var radius:=rng.randf_range(3.8,5.5)
+				var base_scale:float=c.get_meta("base_scale",1.0)
+				c.position=Vector3(cos(angle)*radius,.88,sin(angle)*radius); c.scale=Vector3.ONE*base_scale; c.set_meta("fleeing",false); (c.get_meta("alert") as Label3D).visible=false; c.set_meta("move_timer",rng.randf_range(.5,1.8))
+		else:
+			if dragging and offset.length()<1.35: continue
+			var timer:float=c.get_meta("move_timer")-d
+			if timer<=0.0:
+				var pause:=rng.randf()<.28
+				c.set_meta("move_dir",Vector2.ZERO if pause else Vector2.from_angle(rng.randf_range(0,TAU)))
+				timer=rng.randf_range(.45,1.15) if pause else rng.randf_range(1.2,3.2)
+			c.set_meta("move_timer",timer)
+			var direction:Vector2=c.get_meta("move_dir")
+			if Vector2(c.position.x,c.position.z).length()>5.65:
+				direction=Vector2(-c.position.x,-c.position.z).normalized(); c.set_meta("move_dir",direction)
+			if direction.length_squared()>.01:
+				c.position.x+=direction.x*d*.52; c.position.z+=direction.y*d*.52
+				c.rotation.y=lerp_angle(c.rotation.y,atan2(direction.x,direction.y),min(1.0,d*5.0))
+				var phase:float=c.get_meta("walk_phase")+d*7.0; c.set_meta("walk_phase",phase); c.position.y=.88+abs(sin(phase))*.055
 
 func abduct(d:float)->void:
-	var chosen:Node3D
-	var closest:=99.0
-	for c in creatures:
-		if not is_instance_valid(c): continue
-		var dist:=Vector2(c.position.x-ship.position.x,c.position.z-ship.position.z).length()
-		if dist<1.05 and dist<closest: chosen=c; closest=dist
-	if chosen==null:return
-	chosen.position.x=lerp(chosen.position.x,ship.position.x,d*4)
-	chosen.position.z=lerp(chosen.position.z,ship.position.z,d*4)
-	chosen.position.y+=d*(2.2 if frenzy>0 else 1.25)
-	chosen.scale=Vector3.ONE*clamp((ship.position.y-chosen.position.y)/2.0,.25,1.0)
-	if chosen.position.y>2.25:
+	# Every collectible inside the beam is lifted at once, as in the reference.
+	for chosen in creatures.duplicate():
+		if not is_instance_valid(chosen): continue
+		var dist:=Vector2(chosen.position.x-ship.position.x,chosen.position.z-ship.position.z).length()
+		if dist>=1.18: continue
+		chosen.position.x=lerp(chosen.position.x,ship.position.x,d*5.2)
+		chosen.position.z=lerp(chosen.position.z,ship.position.z,d*5.2)
+		chosen.position.y+=d*(2.8 if frenzy>0 else 1.65)
+		chosen.rotation.y+=d*7.0
+		var base_scale:float=chosen.get_meta("base_scale",1.0)
+		chosen.scale=Vector3.ONE*base_scale*clamp((ship.position.y-chosen.position.y)/2.0,.18,1.0)
+		if chosen.position.y<=2.28: continue
 		var kind:int=chosen.get_meta("kind")
-		var good:=kind==target_kind or frenzy>0
-		if good:
-			combo+=1; var gain:=100*mini(5,1+floori(combo/4.0))*(2 if frenzy>0 else 1); score+=gain; charge=min(100,charge+12); pop_feedback("+%d"%gain,Color("#ffffff"),chosen.global_position)
-			if combo%5==0:target_kind=rng.randi_range(0,3)
-		else:
-			combo=0; score=max(0,score-75); time_left=max(0,time_left-2); pop_feedback("MISS",Color("#ff4e62"),chosen.global_position)
-		creatures.erase(chosen); chosen.queue_free(); spawn_creature()
+		combo+=1
+		var gain:=(1 if kind>=4 else 2)+(1 if combo%5==0 else 0)
+		if frenzy>0: gain*=2
+		score+=gain; level_progress+=gain; charge=min(100,charge+8.34); coins+=1
+		update_charge_segments(); pop_feedback("+%d"%gain,Color("#ffffff"),chosen.global_position)
+		creatures.erase(chosen); chosen.queue_free()
+		if combo%5==0: target_kind=rng.randi_range(0,KINDS.size()-1)
+		if creatures.is_empty():
+			open_exit_portal()
+			return
 
+func abduct_hazards(d:float)->void:
+	for hazard in hazards.duplicate():
+		if not is_instance_valid(hazard):
+			hazards.erase(hazard)
+			continue
+		var distance:=Vector2(hazard.position.x-ship.position.x,hazard.position.z-ship.position.z).length()
+		if distance>=1.18: continue
+		hazard.position.x=lerp(hazard.position.x,ship.position.x,minf(1.0,d*5.2))
+		hazard.position.z=lerp(hazard.position.z,ship.position.z,minf(1.0,d*5.2))
+		hazard.position.y+=d*1.8
+		hazard.rotation.y+=d*8.0
+		hazard.scale=Vector3.ONE*clamp((ship.position.y-hazard.position.y)/2.0,.18,1.0)
+		if hazard.position.y<=2.28: continue
+		var hazard_kind:int=hazard.get_meta("hazard")
+		hazards.erase(hazard)
+		hazard.queue_free()
+		if hazard_kind==0:
+			pop_feedback("BOOM!",Color("#ff5a3d"),ship.global_position)
+			destroy_ufo()
+			return
+		if not burning:
+			burning=true
+			burn_time=4.0
+			pop_feedback("FIRE! FIND THE POND",Color("#ffb52f"),ship.global_position)
+
+func destroy_ufo()->void:
+	if game_state!="play": return
+	lives-=1
+	combo=0
+	burning=false
+	burn_time=0.0
+	fire_visual.visible=false
+	dragging=false
+	beam.visible=false
+	if lives<=0:
+		pop_feedback("UFO DESTROYED",Color("#ff4d62"),ship.global_position)
+		finish_game()
+		return
+	target_position=Vector3(0,2.7,0)
+	ship.position=target_position
+	ship.rotation=Vector3.ZERO
+	pop_feedback("LIFE LOST",Color("#ff6b76"),ship.global_position)
+
+func next_level()->void:
+	start_level_portal()
 func update_hud()->void:
-	score_label.text=str(score); target_label.text=KINDS[target_kind]
+	score_label.text=str(score); target_label.text=KINDS[target_kind]; combo_label.visible=true; combo_label.position=Vector2(20,78); combo_label.text="LEVEL %d   LIVES %d"%[level,lives]; combo_label.add_theme_font_size_override("font_size",16)
 	if frenzy>0:target_label.text="FRENZY"
+
+func update_charge_segments()->void:
+	var lit_count:=ceili(charge/100.0*charge_segments.size())
+	for i in charge_segments.size():
+		if i<lit_count:
+			charge_segments[i].material_override=mat(Color("#ffe34c"),Color("#ffd52c"))
+		else:
+			charge_segments[i].material_override=mat(Color("#7656a8"),Color("#523878"))
 
 func pop_feedback(message:String,color:Color,world_pos:Vector3)->void:
 	var l:=make_label(hud_root,message,camera.unproject_position(world_pos),32,150,HORIZONTAL_ALIGNMENT_CENTER)
@@ -442,9 +836,8 @@ func pop_feedback(message:String,color:Color,world_pos:Vector3)->void:
 	tw.chain().tween_callback(l.queue_free)
 
 func finish_game()->void:
-	game_state="over"; dragging=false; beam.visible=false; camera.size=18.0; game_ui.visible=false
+	game_state="menu"; dragging=false; beam.visible=false; camera.size=18.0; game_ui.visible=false
 	if score>best:
 		best=score
 		var f:=FileAccess.open("user://best3d.txt",FileAccess.WRITE); f.store_string(str(best))
-	result_label.text="SCORE %05d
-BEST %05d"%[score,best]; result_panel.visible=true
+	show_menu("home")

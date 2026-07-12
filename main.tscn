@@ -1,3 +1,6 @@
-[gd_scene format=3 uid="uid://bxobhbsoq0kor"]
+[gd_scene load_steps=2 format=3]
 
-[node name="UfoAbduction" type="Node3D" unique_id=62262403]
+[ext_resource type="Script" path="res://main.gd" id="1_main"]
+
+[node name="UfoAbduction" type="Node3D"]
+script = ExtResource("1_main")

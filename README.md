@@ -2,7 +2,7 @@
 
 A portrait 3D arcade game for Android, built with Godot 4.7.
 
-Guide a low-poly UFO around a floating farm island, abduct the requested creatures, build score combos, and charge Frenzy before the 60-second shift ends. The project takes gameplay and presentation inspiration from *Suck It Up* while using original procedural models, materials, environments, UI, and code.
+Guide a low-poly UFO around a floating farm island, abduct the requested creatures, build score combos, and charge Frenzy before the 60-second shift ends. The project takes gameplay and presentation inspiration from _Suck It Up_ while using original procedural models, materials, environments, UI, and code.
 
 ## Current features
 
@@ -43,6 +43,7 @@ External reference sources:
 - App Store page: https://apps.apple.com/us/app/suck-it-up/id1192670763
 - Gameplay video: https://youtu.be/HuE8JKTiZH0?si=P9EQ-Nix2HGxp7Zb
 - Additional gameplay reference (from 1:15, right side): https://youtu.be/kVTvKtlJfeg?si=7ojN82FkFsWYkSJ5
+- Another gameplay reference (from 0:15, right side):https://youtu.be/lshZ_CxqWiQ?si=w9ztq2zxxOvErX_0
 
 The folder contains a .gdignore file, preventing Godot from importing or packaging the screenshots into the Android build. The screenshots and external links are reference material only and are not used as game assets.
 
@@ -78,7 +79,7 @@ Export through **Project > Export > Android > Export Project**.
 
 For command-line debug builds:
 
-    & 'C:\Program Files\Godot\Godot_v4.7-stable_win64_console.exe' --headless --path . --export-debug Android 'build\ufo-abduction.apk'
+	& 'C:\Program Files\Godot\Godot_v4.7-stable_win64_console.exe' --headless --path . --export-debug Android 'build\ufo-abduction.apk'
 
 The generated debug APK can be installed directly on an ARM64 Android device. Android may require permission to install applications from unknown sources.
 
