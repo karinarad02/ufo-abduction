@@ -7,6 +7,12 @@ const ANIMAL_RUN_SPEEDS := [1.18, 1.48, 1.28, 1.32]
 const FLEE_DETECTION_RADIUS := 2.25
 const BEAM_CAPTURE_RADIUS := 1.32
 const SHIP_GAME_SCALE := .82
+const ARRIVAL_RING_SCALE := 2.05
+const ARRIVAL_RING_DEPTH_SCALE := 1.0
+const ARRIVAL_RING_OFFSETS := [1.95,-0.45,-2.10]
+const GameplayHUD = preload("res://scripts/ui/gameplay_hud.gd")
+const IntroScreen = preload("res://scripts/ui/intro_screen.gd")
+const SplashScreen = preload("res://scripts/ui/splash_screen.gd")
 var rng := RandomNumberGenerator.new()
 var ship: Node3D
 var ship_sprite: Sprite3D
@@ -29,17 +35,12 @@ var target_kind := 0
 var time_left := 60.0
 var charge := 0.0
 var frenzy := 0.0
-var score_label: Label
-var timer_label: Label
-var target_label: Label
-var combo_label: Label
-var frenzy_bar: ProgressBar
-var title_panel: Control
 var result_panel: Control
 var result_label: Label
 var result_detail_label: Label
 var hud_root: Control
-var pause_button: Button
+var gameplay_hud: Control
+var intro_screen: Control
 var menu_root: Control
 var menu_content: Control
 var game_ui: Control
@@ -49,9 +50,6 @@ var duck_level := 4
 var level := 1
 var level_progress := 0
 var level_goal := 600
-var tutorial_panel: Control
-var intro_overlay: Control
-var intro_rings: Array[Label] = []
 var arrival_rings: Array[MeshInstance3D] = []
 var arrival_flash: MeshInstance3D
 var intro_time := 0.0
@@ -239,16 +237,36 @@ func build_ship() -> void:
 		var a:=i*TAU/12.0
 		var segment:=box(ship,Vector3(.20,.045,.34),Vector3(cos(a)*.98,-2.22,sin(a)*.98),Color("#7656a8"))
 		segment.rotation.y=-a; segment.material_override=mat(Color("#7656a8"),Color("#523878")); charge_segments.append(segment)
-	# Four softly glowing hoops with the stepped silhouette from the reference.
-	var ring_sizes:=[1.02,1.30,1.58,1.42]
-	for i in 4:
-		var ring:=MeshInstance3D.new(); var torus:=TorusMesh.new()
-		torus.inner_radius=.91; torus.outer_radius=1.0; torus.rings=32; torus.ring_segments=12
-		ring.mesh=torus; ring.scale=Vector3.ONE*ring_sizes[i]; ring.material_override=mat(Color(0.68,1.0,1.0,.76),Color("#8effff"),true); ring.visible=false
+	# Three large perspective hoops spanning the beam, as in the reference frame.
+	for i in 3:
+		var ring:=MeshInstance3D.new()
+		var tone:=i/2.0
+		var ring_color:=Color(lerpf(.76,.28,tone),1.0,lerpf(.98,.88,tone))
+		ring.mesh=make_soft_arrival_ring(ring_color)
+		var ring_shader:=Shader.new(); ring_shader.code="shader_type spatial; render_mode unshaded, cull_disabled, blend_mix, depth_draw_opaque; uniform float opacity = 1.0; void fragment(){ ALBEDO = COLOR.rgb; EMISSION = COLOR.rgb * 0.70; ALPHA = COLOR.a * opacity; }"
+		var ring_material:=ShaderMaterial.new(); ring_material.shader=ring_shader; ring_material.set_shader_parameter("opacity",lerpf(.88,1.0,tone))
+		ring.scale=Vector3(ARRIVAL_RING_SCALE,ARRIVAL_RING_SCALE,ARRIVAL_RING_SCALE*ARRIVAL_RING_DEPTH_SCALE); ring.material_override=ring_material; ring.visible=false
 		add_child(ring); arrival_rings.append(ring)
 	arrival_flash=MeshInstance3D.new(); var flash_mesh:=SphereMesh.new()
 	flash_mesh.radius=.72; flash_mesh.height=1.15; flash_mesh.radial_segments=20; flash_mesh.rings=10
 	arrival_flash.mesh=flash_mesh; arrival_flash.material_override=mat(Color(1.0,.91,.42,.42),Color("#ffe96b"),true); arrival_flash.visible=false; add_child(arrival_flash)
+
+func make_soft_arrival_ring(base_color:Color)->ArrayMesh:
+	var surface:=SurfaceTool.new(); surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var radii:=[.78,.84,.91,.97,1.03,1.10,1.16]
+	var alpha_stops:=[0.0,.10,.38,.72,.38,.10,0.0]
+	var white_mix:=[.05,.16,.40,.72,.40,.16,.05]
+	var colors:Array[Color]=[]
+	for i in radii.size():
+		var color:=base_color.lerp(Color.WHITE,white_mix[i]); color.a=alpha_stops[i]; colors.append(color)
+	for segment in 96:
+		var a0:=TAU*segment/96.0; var a1:=TAU*(segment+1)/96.0
+		for band in radii.size()-1:
+			var p00:=Vector3(cos(a0)*radii[band],0,sin(a0)*radii[band]); var p01:=Vector3(cos(a1)*radii[band],0,sin(a1)*radii[band])
+			var p10:=Vector3(cos(a0)*radii[band+1],0,sin(a0)*radii[band+1]); var p11:=Vector3(cos(a1)*radii[band+1],0,sin(a1)*radii[band+1])
+			for item in [[p00,colors[band]],[p10,colors[band+1]],[p11,colors[band+1]],[p00,colors[band]],[p11,colors[band+1]],[p01,colors[band]]]:
+				surface.set_normal(Vector3.UP); surface.set_color(item[1]); surface.add_vertex(item[0])
+	return surface.commit()
 
 func animal_eye(parent:Node3D,pos:Vector3)->void:
 	box(parent,Vector3(.115,.16,.055),pos,Color("#171923"))
@@ -437,36 +455,11 @@ func build_ui() -> void:
 	game_ui=Control.new()
 	game_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(game_ui)
-	var top_band:=ColorRect.new()
-	top_band.color=Color("#617da9a8"); top_band.position=Vector2(0,0); top_band.size=Vector2(540,96); top_band.mouse_filter=Control.MOUSE_FILTER_IGNORE
-	game_ui.add_child(top_band)
-	score_label=make_label(game_ui,"0",Vector2(20,17),44)
-	score_label.add_theme_constant_override("outline_size",3); score_label.add_theme_color_override("font_outline_color",Color("#43516a"))
-	timer_label=make_label(game_ui,"",Vector2.ZERO,1); timer_label.visible=false
-	build_hud_lock(game_ui)
-	target_label=make_label(game_ui,"",Vector2.ZERO,1); target_label.visible=false
-	combo_label=make_label(game_ui,"",Vector2.ZERO,1); combo_label.visible=false
-	frenzy_bar=ProgressBar.new(); frenzy_bar.visible=false; game_ui.add_child(frenzy_bar)
-	pause_button=Button.new(); pause_button.text=""; pause_button.position=Vector2(470,18); pause_button.size=Vector2(52,52)
-	var pause_style:=StyleBoxFlat.new(); pause_style.bg_color=Color(0,0,0,0); pause_style.border_color=Color.WHITE; pause_style.set_border_width_all(4)
-	var pause_pressed:=pause_style.duplicate(); pause_pressed.bg_color=Color(1,1,1,.16); pause_pressed.set_border_width_all(4)
-	pause_button.add_theme_stylebox_override("normal",pause_style); pause_button.add_theme_stylebox_override("hover",pause_style); pause_button.add_theme_stylebox_override("pressed",pause_pressed)
-	icon_rect(pause_button,Vector2(14,11),Vector2(7,24),Color.WHITE); icon_rect(pause_button,Vector2(29,11),Vector2(7,24),Color.WHITE)
-	pause_button.button_down.connect(press_menu_button.bind(pause_button,Vector2(470,18))); pause_button.button_up.connect(release_menu_button.bind(pause_button,Vector2(470,18)))
-	pause_button.process_mode=Node.PROCESS_MODE_ALWAYS; pause_button.pressed.connect(toggle_pause); game_ui.add_child(pause_button)
-	tutorial_panel=Control.new(); tutorial_panel.position=Vector2.ZERO; tutorial_panel.size=Vector2(540,960); tutorial_panel.mouse_filter=Control.MOUSE_FILTER_IGNORE; game_ui.add_child(tutorial_panel)
-	make_label(tutorial_panel,"SLIDE TO SUCK",Vector2(0,750),25,540,HORIZONTAL_ALIGNMENT_CENTER)
-	make_label(tutorial_panel,"←     ▰     →",Vector2(0,795),34,540,HORIZONTAL_ALIGNMENT_CENTER)
-	tutorial_panel.visible=false
-	intro_overlay=Control.new(); intro_overlay.position=Vector2.ZERO; intro_overlay.size=Vector2(540,960); intro_overlay.mouse_filter=Control.MOUSE_FILTER_IGNORE; game_ui.add_child(intro_overlay)
-	var logo_shadow:=make_label(intro_overlay,"SUCK IT UP",Vector2(0,67),54,540,HORIZONTAL_ALIGNMENT_CENTER)
-	logo_shadow.add_theme_color_override("font_color",Color("#172438")); logo_shadow.add_theme_constant_override("outline_size",10); logo_shadow.add_theme_color_override("font_outline_color",Color("#172438"))
-	var logo:=make_label(intro_overlay,"SUCK IT UP",Vector2(0,58),54,540,HORIZONTAL_ALIGNMENT_CENTER)
-	logo.add_theme_color_override("font_color",Color("#42d7e8")); logo.add_theme_constant_override("outline_size",5); logo.add_theme_color_override("font_outline_color",Color("#101923"))
-	for i in 0:
-		var ring:=make_label(intro_overlay,"○",Vector2(0,330+i*62),130+i*26,540,HORIZONTAL_ALIGNMENT_CENTER)
-		ring.add_theme_color_override("font_color",Color(0.65,1.0,1.0,.72-i*.13)); intro_rings.append(ring)
-	intro_overlay.visible=false
+	gameplay_hud=GameplayHUD.new(); game_ui.add_child(gameplay_hud); gameplay_hud.setup()
+	gameplay_hud.pause_requested.connect(toggle_pause)
+	intro_screen=IntroScreen.new(); game_ui.add_child(intro_screen); intro_screen.setup()
+	intro_screen.pilots_requested.connect(show_menu.bind("pilots"))
+	intro_screen.research_requested.connect(show_menu.bind("research"))
 	result_panel=panel(root,Vector2(55,220),Vector2(430,460),Color("#35479bf2"))
 	make_label(result_panel,"RESULTS",Vector2(0,24),38,430,HORIZONTAL_ALIGNMENT_CENTER)
 	result_label=make_label(result_panel,"NEW BEST\n00000",Vector2(0,92),34,430,HORIZONTAL_ALIGNMENT_CENTER)
@@ -481,7 +474,7 @@ func build_ui() -> void:
 	if OS.get_cmdline_user_args().has("--capture-gameplay"):
 		begin_game_intro(); activate_intro_control()
 	else:
-		build_splash(root)
+		var splash:=SplashScreen.new(); root.add_child(splash); splash.setup(); splash.finished.connect(begin_game_intro)
 
 func build_continue_panel(root:Control)->void:
 	continue_panel=Control.new(); continue_panel.position=Vector2.ZERO; continue_panel.size=Vector2(540,960); continue_panel.mouse_filter=Control.MOUSE_FILTER_STOP; root.add_child(continue_panel)
@@ -497,45 +490,12 @@ func build_continue_panel(root:Control)->void:
 	var paid:=menu_button(card,"◆ 5",Vector2(292,274),Vector2(120,70),Color("#cf43df")); paid.add_theme_font_size_override("font_size",24); paid.pressed.connect(continue_with_gems)
 	continue_panel.visible=false
 
-func build_hud_lock(parent:Control)->void:
-	var badge:=Control.new(); badge.position=Vector2(232,8); badge.size=Vector2(76,76); badge.mouse_filter=Control.MOUSE_FILTER_IGNORE; parent.add_child(badge)
-	var left_points:=PackedVector2Array([Vector2(38,38)])
-	for i in 17:
-		var angle:=PI/2.0+PI*i/16.0
-		left_points.append(Vector2(38+cos(angle)*36,38+sin(angle)*36))
-	var left_half:=Polygon2D.new(); left_half.polygon=left_points; left_half.color=Color("#43516a"); badge.add_child(left_half)
-	var right_points:=PackedVector2Array([Vector2(38,38)])
-	for i in 17:
-		var angle:=-PI/2.0+PI*i/16.0
-		right_points.append(Vector2(38+cos(angle)*36,38+sin(angle)*36))
-	var right_half:=Polygon2D.new(); right_half.polygon=right_points; right_half.color=Color("#f5c51e"); badge.add_child(right_half)
-	# White padlock body and outlined shackle, built from native controls.
-	var shackle:=Panel.new(); shackle.position=Vector2(27,19); shackle.size=Vector2(22,25)
-	var shackle_style:=StyleBoxFlat.new(); shackle_style.bg_color=Color(0,0,0,0); shackle_style.border_color=Color.WHITE; shackle_style.border_width_left=5; shackle_style.border_width_right=5; shackle_style.border_width_top=5; shackle_style.corner_radius_top_left=10; shackle_style.corner_radius_top_right=10
-	shackle.add_theme_stylebox_override("panel",shackle_style); badge.add_child(shackle)
-	var lock_body:=ColorRect.new(); lock_body.position=Vector2(24,37); lock_body.size=Vector2(28,22); lock_body.color=Color.WHITE; badge.add_child(lock_body)
-	var keyhole:=ColorRect.new(); keyhole.position=Vector2(36,44); keyhole.size=Vector2(4,9); keyhole.color=Color("#d3aa20"); badge.add_child(keyhole)
-
-func build_splash(root:Control)->void:
-	var splash:=Control.new(); splash.position=Vector2.ZERO; splash.size=Vector2(540,960); splash.mouse_filter=Control.MOUSE_FILTER_STOP; root.add_child(splash)
-	var bg:=ColorRect.new(); bg.color=Color("#f6f6f6"); bg.position=Vector2.ZERO; bg.size=Vector2(540,960); splash.add_child(bg)
-	var app_logo:=Control.new(); app_logo.position=Vector2.ZERO; app_logo.size=Vector2(540,960); splash.add_child(app_logo)
-	var ufo_logo:=TextureRect.new(); ufo_logo.expand_mode=TextureRect.EXPAND_IGNORE_SIZE; ufo_logo.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED; ufo_logo.texture=load("res://assets/branding/ufo-logo-generated.png"); ufo_logo.position=Vector2(50,245); ufo_logo.size=Vector2(440,402); app_logo.add_child(ufo_logo)
-	var company_logo:=Control.new(); company_logo.position=Vector2.ZERO; company_logo.size=Vector2(540,960); company_logo.visible=false; splash.add_child(company_logo)
-	var kiseki_logo:=TextureRect.new(); kiseki_logo.expand_mode=TextureRect.EXPAND_IGNORE_SIZE; kiseki_logo.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED; kiseki_logo.texture=load("res://assets/branding/kiseki-logo-generated.png"); kiseki_logo.position=Vector2(42,330); kiseki_logo.size=Vector2(456,289); company_logo.add_child(kiseki_logo)
-	var tw:=create_tween()
-	tw.tween_interval(1.8)
-	tw.tween_callback(func(): app_logo.visible=false; company_logo.visible=true)
-	tw.tween_interval(1.8)
-	tw.tween_property(splash,"modulate:a",0.0,.45)
-	tw.tween_callback(func(): splash.queue_free(); begin_game_intro())
-
 func begin_game_intro()->void:
-	game_state="intro"; score=0; combo=0; suction_chain_count=0; suction_chain_points=0; suction_chain_time=0; level=1; level_progress=0; level_goal=50; time_left=45; charge=0; frenzy=0
+	game_state="intro"; score=0; combo=0; suction_chain_count=0; suction_chain_points=0; suction_chain_time=0; level=1; level_progress=0; level_goal=25; time_left=45; charge=0; frenzy=0
 	continue_panel.visible=false; ship.visible=true
-	update_charge_segments()
-	menu_root.visible=false; game_ui.visible=true; result_panel.visible=false; pause_button.visible=false
-	intro_overlay.visible=false; tutorial_panel.visible=false; intro_time=0.0; intro_landed=false
+	update_charge_segments(); gameplay_hud.set_level_progress(level_progress,level_goal)
+	menu_root.visible=false; game_ui.visible=true; result_panel.visible=false
+	gameplay_hud.reset_hidden(); intro_screen.reset_hidden(); intro_time=0.0; intro_landed=false
 	target_position=Vector3(0,2.7,0); ship.scale=Vector3.ONE*(SHIP_GAME_SCALE*.78); ship.position=Vector3(0,6.8,-1.35); camera.size=13.8
 	ring_center=target_position
 	for ring in arrival_rings: ring.visible=true
@@ -548,15 +508,13 @@ func begin_game_intro()->void:
 
 func finish_intro_arrival()->void:
 	if game_state!="intro": return
-	intro_landed=true; intro_overlay.visible=true; tutorial_panel.visible=true; beam.visible=true; arrival_flash.visible=false
-	intro_overlay.position=Vector2(540,0); intro_overlay.modulate.a=1.0; tutorial_panel.modulate.a=0.0
-	var reveal:=create_tween().set_parallel(true)
-	reveal.tween_property(intro_overlay,"position",Vector2.ZERO,.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	reveal.tween_property(tutorial_panel,"modulate:a",1.0,.28).set_delay(.08)
+	intro_landed=true; beam.visible=true; arrival_flash.visible=false
+	intro_screen.reveal()
 
 func activate_intro_control()->void:
 	if game_state!="intro": return
-	game_state="play"; intro_overlay.visible=false; tutorial_panel.visible=false; pause_button.visible=true; dragging=true
+	game_state="play"; dragging=true
+	intro_screen.animate_out(); gameplay_hud.animate_in()
 	for ring in arrival_rings: ring.visible=false
 	arrival_flash.visible=false
 
@@ -573,6 +531,7 @@ func start_level_portal()->void:
 
 func complete_level_portal()->void:
 	level+=1; level_progress=0; level_goal=roundi(level_goal*1.25); time_left=45.0; suction_chain_count=0; suction_chain_points=0; suction_chain_time=0; target_kind=rng.randi_range(0,KINDS.size()-1)
+	gameplay_hud.set_level_progress(level_progress,level_goal)
 	populate_level()
 	target_position=Vector3(0,2.7,0); ring_center=target_position; ship.position=Vector3(0,7.2,-1.0); ship.scale=Vector3(.45,.45,.45)
 	arrival_flash.position=Vector3(0,1.8,0); arrival_flash.scale=Vector3(1.1,1.1,1.1)
@@ -601,13 +560,36 @@ func build_menu_shell(root:Control)->void:
 	make_label(menu_root,"◇ %d"%coins,Vector2(360,22),28)
 	var coin_plus:=menu_button(menu_root,"+",Vector2(480,13),Vector2(46,52),Color("#16bc67")); coin_plus.add_theme_font_size_override("font_size",30)
 	menu_content=Control.new(); menu_content.position=Vector2(14,88); menu_content.size=Vector2(512,758); menu_root.add_child(menu_content)
-	var tabs=[["collection",Color("#45bdf4"),"collections"],["research",Color("#c43fe0"),"research"],["pilots",Color("#f49a18"),"pilots"],["play",Color("#24c85d"),"play"]]
+	var nav_back:=ColorRect.new(); nav_back.position=Vector2(0,810); nav_back.size=Vector2(540,150); nav_back.color=Color("#406898"); nav_back.mouse_filter=Control.MOUSE_FILTER_IGNORE; menu_root.add_child(nav_back)
+	var tabs=[
+		["collection",Color("#48a1e3"),Color("#86e8dc"),Color("#106fba"),"collections"],
+		["research",Color("#af47d0"),Color("#ebb6fc"),Color("#7d27b1"),"research"],
+		["pilots",Color("#eb9e00"),Color("#ffde04"),Color("#d45d00"),"pilots"],
+		["play",Color("#27b956"),Color("#77d480"),Color("#158c54"),"play"]
+	]
+	var tab_x:=[8.0,140.0,274.0,407.0]
 	for i in tabs.size():
-		var b:=menu_button(menu_root,"",Vector2(7+i*133,821),Vector2(127,134),tabs[i][1])
+		var b:=nav_menu_button(menu_root,Vector2(tab_x[i],822),tabs[i][1],tabs[i][2],tabs[i][3])
 		add_nav_icon(b,tabs[i][0])
-		var page:String=tabs[i][2]
+		var page:String=tabs[i][4]
 		if page=="play": b.pressed.connect(start_game)
 		else: b.pressed.connect(show_menu.bind(page))
+
+func nav_menu_button(parent:Node,pos:Vector2,face_color:Color,rim_color:Color,step_color:Color)->Button:
+	# Reference 10: 149x154 px at 640x1136, scaled to the 540x960 project viewport.
+	var button:=Button.new(); button.position=pos; button.size=Vector2(126,130); button.focus_mode=Control.FOCUS_NONE
+	var clear:=StyleBoxFlat.new(); clear.bg_color=Color(0,0,0,0)
+	button.add_theme_stylebox_override("normal",clear); button.add_theme_stylebox_override("hover",clear); button.add_theme_stylebox_override("pressed",clear)
+	var step:=ColorRect.new(); step.position=Vector2.ZERO; step.size=Vector2(126,130); step.color=step_color; step.mouse_filter=Control.MOUSE_FILTER_IGNORE; button.add_child(step)
+	var face:=Panel.new(); face.position=Vector2.ZERO; face.size=Vector2(126,108); face.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	var face_style:=StyleBoxFlat.new(); face_style.bg_color=face_color; face_style.border_color=rim_color
+	face_style.border_width_left=6; face_style.border_width_right=6; face_style.border_width_top=6; face_style.border_width_bottom=6
+	face.add_theme_stylebox_override("panel",face_style); button.add_child(face)
+	# Reference 10 keeps the artwork and its shadow inside the bordered upper face.
+	var icon_host:=Control.new(); icon_host.position=Vector2(6,6); icon_host.size=Vector2(114,96); icon_host.clip_contents=true; icon_host.mouse_filter=Control.MOUSE_FILTER_IGNORE
+	button.add_child(icon_host); button.set_meta("icon_host",icon_host)
+	button.button_down.connect(press_menu_button.bind(button,pos)); button.button_up.connect(release_menu_button.bind(button,pos)); button.mouse_exited.connect(release_menu_button.bind(button,pos))
+	parent.add_child(button); return button
 
 func clear_content()->void:
 	for child in menu_content.get_children(): child.queue_free()
@@ -754,10 +736,11 @@ func add_nav_icon(button:Button,kind:String)->void:
 		"play":"res://assets/ui/nav-icons/nav-play-icon.png"
 	}
 	var icon:=TextureRect.new()
-	icon.texture=load(paths[kind]); icon.position=Vector2(14,12); icon.size=Vector2(99,92)
+	# Center against the 126x108 colored face, excluding the 22px lower step.
+	icon.texture=load(paths[kind]); icon.position=Vector2(7,0); icon.size=Vector2(100,96)
 	icon.expand_mode=TextureRect.EXPAND_IGNORE_SIZE; icon.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter=Control.MOUSE_FILTER_IGNORE
-	button.add_child(icon)
+	(button.get_meta("icon_host") as Control).add_child(icon)
 
 func reference_heading(title:String,left_color:Color,right_color:Color)->void:
 	var bar:=panel(menu_content,Vector2(0,0),Vector2(512,104),Color("#3155bd")); round_panel(bar,0,Color("#3155bd"),0)
@@ -800,19 +783,24 @@ func _input(e:InputEvent)->void:
 	if e is InputEventScreenTouch:
 		dragging=e.pressed
 		if not e.pressed and game_state=="play": finalize_suction_chain()
-		if e.pressed and game_state=="intro": activate_intro_control()
 		if e.pressed and game_state=="over": start_game()
-	elif e is InputEventScreenDrag and game_state=="play":
-		target_position.x=clamp(target_position.x+e.relative.x*.018,-7.4,7.4)
-		target_position.z=clamp(target_position.z+e.relative.y*.018,-7.0,7.0)
+	elif e is InputEventScreenDrag:
+		if game_state=="intro" and e.relative.length()>1.0 and not intro_shortcut_at(e.position): activate_intro_control()
+		if game_state=="play":
+			target_position.x=clamp(target_position.x+e.relative.x*.018,-7.4,7.4)
+			target_position.z=clamp(target_position.z+e.relative.y*.018,-7.0,7.0)
 	elif e is InputEventMouseButton:
 		dragging=e.pressed
 		if not e.pressed and game_state=="play": finalize_suction_chain()
-		if e.pressed and game_state=="intro": activate_intro_control()
 		if e.pressed and game_state=="over": start_game()
-	elif e is InputEventMouseMotion and dragging and game_state=="play":
-		target_position.x=clamp(target_position.x+e.relative.x*.018,-7.4,7.4)
-		target_position.z=clamp(target_position.z+e.relative.y*.018,-7.0,7.0)
+	elif e is InputEventMouseMotion and dragging:
+		if game_state=="intro" and e.relative.length()>1.0 and not intro_shortcut_at(e.position): activate_intro_control()
+		if game_state=="play":
+			target_position.x=clamp(target_position.x+e.relative.x*.018,-7.4,7.4)
+			target_position.z=clamp(target_position.z+e.relative.y*.018,-7.0,7.0)
+
+func intro_shortcut_at(screen_position:Vector2)->bool:
+	return intro_screen.has_shortcut_at(screen_position)
 
 func toggle_pause()->void:
 	if game_state!="play": return
@@ -829,16 +817,17 @@ func _process(d:float)->void:
 	if game_state=="dying": return
 	if game_state=="intro" or game_state=="portal" or portal_open:
 		intro_time+=d
+		var ring_bob:=sin(intro_time*2.4)*.07
+		var ring_pulse:=1.0+sin(intro_time*3.0)*.025
+		var ring_alpha:=.66+sin(intro_time*3.0)*.045
 		for i in arrival_rings.size():
 			var ring:=arrival_rings[i]
-			var ring_offsets:=[.70,.05,-.65,-1.32]
-			var ring_sizes:=[1.02,1.30,1.58,1.42]
-			ring.position=Vector3(ring_center.x,ring_center.y+ring_offsets[i]+sin(intro_time*2.4-i*.7)*.07,ring_center.z)
-			var pulse:=1.0+sin(intro_time*3.0-i*.55)*.035
-			ring.scale=Vector3.ONE*ring_sizes[i]*pulse
-			ring.rotation.y+=d*(.32 if i%2==0 else -.28)
-			var ring_mat:=ring.material_override as StandardMaterial3D
-			ring_mat.albedo_color=Color(0.68,1.0,1.0,.76)
+			ring.position=Vector3(ring_center.x,ring_center.y+ARRIVAL_RING_OFFSETS[i]+ring_bob,ring_center.z)
+			ring.scale=Vector3(ARRIVAL_RING_SCALE*ring_pulse,ARRIVAL_RING_SCALE*ring_pulse,ARRIVAL_RING_SCALE*ARRIVAL_RING_DEPTH_SCALE*ring_pulse)
+			ring.rotation=Vector3.ZERO
+			var tone:=i/2.0
+			var ring_mat:=ring.material_override as ShaderMaterial
+			ring_mat.set_shader_parameter("opacity",ring_alpha*lerpf(1.25,1.45,tone))
 	if game_state=="play":
 		var previous_x:=ship.position.x
 		ship.position=ship.position.lerp(target_position,min(1.0,d*8.0))
@@ -1097,8 +1086,9 @@ func restart_after_death()->void:
 func next_level()->void:
 	start_level_portal()
 func update_hud()->void:
-	score_label.text=str(score)
-	combo_label.visible=false
+	gameplay_hud.set_score(score)
+	gameplay_hud.set_level_progress(level_progress,level_goal)
+	if level_progress>=level_goal and not portal_open and game_state=="play": open_exit_portal()
 
 func update_charge_segments()->void:
 	var lit_count:=ceili(charge/100.0*charge_segments.size())
